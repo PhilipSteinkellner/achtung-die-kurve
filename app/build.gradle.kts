@@ -61,5 +61,7 @@ dependencies {
     implementation(libs.ui.tooling)
     implementation(libs.androidx.lifecycle.runtime.ktx.v261)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.play.services.nearby)
+
 
 }
