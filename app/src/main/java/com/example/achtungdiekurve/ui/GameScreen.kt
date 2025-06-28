@@ -1,13 +1,16 @@
 package com.example.achtungdiekurve.ui
 
-import android.annotation.SuppressLint
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,9 +40,6 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
-import androidx.navigation.compose.rememberNavController
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import com.google.android.gms.nearby.connection.ConnectionInfo
@@ -57,21 +57,23 @@ import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
 
-@SuppressLint("UnrememberedMutableState")
 @Composable
 fun CurveGameScreen(
     modifier: Modifier,
     onReturnToMenu: () -> Unit,
-    serviceId: String = "com.example.achtungdiekurve"
+    serviceId: String = "com.example.achtungdiekurve",
+    controlMode: ControlMode
+
 ) {
     val context = LocalContext.current
-    val connectionsClient = remember { Nearby.getConnectionsClient(context) }   // Google's Nearby API client class
+    val connectionsClient =
+        remember { Nearby.getConnectionsClient(context) }   // Google's Nearby API client class
     rememberCoroutineScope()
 
     // Multiplayer connection states - these track whether we're advertising or discovering other devices
 
-    var isAdvertising by mutableStateOf(false)
-    var isDiscovering by mutableStateOf(false)
+    var isAdvertising by remember { mutableStateOf(false) }
+    var isDiscovering by remember { mutableStateOf(false) }
 
 
     val screenWidth = LocalWindowInfo.current.containerSize.width
@@ -101,7 +103,7 @@ fun CurveGameScreen(
     // Multiplayer states
     var showMultiplayerSetup by remember { mutableStateOf(true) }
     var isHost by remember { mutableStateOf(false) }
-    var isConnecting by mutableStateOf(false)
+    var isConnecting by remember { mutableStateOf(false) }
     var connectionStatus by remember { mutableStateOf("Not Connected") }
     var connectedEndpointId by remember { mutableStateOf<String?>(null) }
 
@@ -114,6 +116,36 @@ fun CurveGameScreen(
     val strokeWidth = 6f
     val drawDuration = 200
     val gapDuration = 10
+
+    if (controlMode == ControlMode.TILT) {
+        val context = LocalContext.current
+        val sensorManager =
+            remember { context.getSystemService(Context.SENSOR_SERVICE) as SensorManager }
+        val accelerometer = remember { sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) }
+
+        DisposableEffect(Unit) {
+            val listener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent?) {
+                    event?.let {
+                        val tiltX = it.values[0] // tilt left/right
+                        localTurning = when {
+                            tiltX > 1 -> -1f // turn left
+                            tiltX < -1 -> 1f // turn right
+                            else -> 0f
+                        }
+                    }
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+            }
+
+            sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+
+            onDispose {
+                sensorManager.unregisterListener(listener)
+            }
+        }
+    }
 
     // Reset game state for a new round
     fun resetGame() {
@@ -165,7 +197,8 @@ fun CurveGameScreen(
                     val message = String(payload.asBytes()!!)
                     println("Received game data from $endpointId: $message")
 
-                    val parts = message.split(":")                              // Data is sent as a string - this splits it by colons
+                    val parts =
+                        message.split(":")                              // Data is sent as a string - this splits it by colons
                     when (parts[0]) {
                         "position" -> {                                         // Other player sent their current position and state Format: "x,y,direction,isDrawing"
                             if (parts.size == 2) {
@@ -179,9 +212,17 @@ fun CurveGameScreen(
                                         val newOpponentPos = Offset(x, y)
                                         // Add to opponent's trail with distance check - Prevent duplicates.
                                         if (opponentTrail.isNotEmpty() && (newOpponentPos - opponentTrail.last().position).getDistance() > 1f) {
-                                            opponentTrail.add(TrailSegment(newOpponentPos, isGap = !receivedIsDrawing))
+                                            opponentTrail.add(
+                                                TrailSegment(
+                                                    newOpponentPos, isGap = !receivedIsDrawing
+                                                )
+                                            )
                                         } else if (opponentTrail.isEmpty()) {
-                                            opponentTrail.add(TrailSegment(newOpponentPos, isGap = !receivedIsDrawing))
+                                            opponentTrail.add(
+                                                TrailSegment(
+                                                    newOpponentPos, isGap = !receivedIsDrawing
+                                                )
+                                            )
                                         }
                                     } catch (e: NumberFormatException) {
                                         println("Error parsing received position data: ${e.message}")
@@ -189,6 +230,7 @@ fun CurveGameScreen(
                                 }
                             }
                         }
+
                         "gameover" -> {
                             if (parts.size == 2) {
                                 val crashedPlayer = parts[1]
@@ -202,6 +244,7 @@ fun CurveGameScreen(
                                             gameOverMessage = "You Win! Opponent crashed!"
                                         }
                                     }
+
                                     "opponent" -> {
                                         // We crashed according to opponent
                                         localIsAlive = false
@@ -212,6 +255,7 @@ fun CurveGameScreen(
                                 }
                             }
                         }
+
                         "resetGame" -> {
                             // Other player wants to start a new round
                             resetGame()
@@ -220,7 +264,9 @@ fun CurveGameScreen(
                 }
             }
 
-            override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
+            override fun onPayloadTransferUpdate(
+                endpointId: String, update: PayloadTransferUpdate
+            ) {
                 // Handle payload transfer updates if needed
             }
         }
@@ -235,8 +281,7 @@ fun CurveGameScreen(
                 connectionsClient.acceptConnection(endpointId, payloadCallback)
                     .addOnSuccessListener {
                         connectionStatus = "Accepting connection from: ${info.endpointName}"
-                    }
-                    .addOnFailureListener { e ->
+                    }.addOnFailureListener { e ->
                         connectionStatus = "Failed to accept connection: ${e.message}"
                     }
             }
@@ -252,14 +297,17 @@ fun CurveGameScreen(
                         stopAdvertisingAndDiscovery()
                         resetGame() // Reset game to start fresh after connection
                     }
+
                     ConnectionsStatusCodes.STATUS_CONNECTION_REJECTED -> {
                         connectionStatus = "Connection rejected by other device."
                         isConnecting = false
                     }
+
                     ConnectionsStatusCodes.STATUS_ERROR -> {
                         connectionStatus = "Connection error."
                         isConnecting = false
                     }
+
                     else -> {
                         connectionStatus = "Connection failed: ${result.status.statusCode}"
                         isConnecting = false
@@ -294,16 +342,13 @@ fun CurveGameScreen(
                 connectionStatus = "Found host: ${info.endpointName}, requesting connection..."
                 connectionsClient.requestConnection(
                     "Player Device",                 // TODO There should be someway to customize this in the menus.
-                    endpointId,
-                    connectionLifecycleCallback
-                )
-                    .addOnSuccessListener {
-                        connectionStatus = "Requested connection to: ${info.endpointName}"
-                    }
-                    .addOnFailureListener { e ->
-                        connectionStatus = "Failed to request connection: ${e.message}"
-                        isConnecting = false
-                    }
+                    endpointId, connectionLifecycleCallback
+                ).addOnSuccessListener {
+                    connectionStatus = "Requested connection to: ${info.endpointName}"
+                }.addOnFailureListener { e ->
+                    connectionStatus = "Failed to request connection: ${e.message}"
+                    isConnecting = false
+                }
             }
 
             override fun onEndpointLost(endpointId: String) {
@@ -320,15 +365,11 @@ fun CurveGameScreen(
         isHost = true
         connectionStatus = "Starting to host..."
 
-        val advertisingOptions = AdvertisingOptions.Builder()
-            .setStrategy(Strategy.P2P_POINT_TO_POINT)
-            .build()
+        val advertisingOptions =
+            AdvertisingOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
 
         connectionsClient.startAdvertising(
-            "Game Host",
-            serviceId,
-            connectionLifecycleCallback,
-            advertisingOptions
+            "Game Host", serviceId, connectionLifecycleCallback, advertisingOptions
         ).addOnSuccessListener {
             isAdvertising = true
             connectionStatus = "Waiting for players to join..."
@@ -344,14 +385,11 @@ fun CurveGameScreen(
         isHost = false
         connectionStatus = "Searching for host..."
 
-        val discoveryOptions = DiscoveryOptions.Builder()
-            .setStrategy(Strategy.P2P_POINT_TO_POINT)
-            .build()
+        val discoveryOptions =
+            DiscoveryOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
 
         connectionsClient.startDiscovery(
-            serviceId,
-            endpointDiscoveryCallback,
-            discoveryOptions
+            serviceId, endpointDiscoveryCallback, discoveryOptions
         ).addOnSuccessListener {
             isDiscovering = true
             connectionStatus = "Searching for games..."
@@ -396,7 +434,10 @@ fun CurveGameScreen(
             val heightPx = screenHeight.toFloat()
 
             // Re-initialize local player's position if needed
-            if (localTrail.isEmpty() || (localTrail.size == 1 && localTrail.first().position == Offset(0f, 0f))) {
+            if (localTrail.isEmpty() || (localTrail.size == 1 && localTrail.first().position == Offset(
+                    0f, 0f
+                ))
+            ) {
                 resetGame()
             }
 
@@ -429,7 +470,10 @@ fun CurveGameScreen(
                         val segEnd = localTrail[i + 1]
                         if (segStart.isGap || segEnd.isGap) continue
 
-                        if (distanceFromPointToSegment(next, segStart.position, segEnd.position) < collisionRadius) {
+                        if (distanceFromPointToSegment(
+                                next, segStart.position, segEnd.position
+                            ) < collisionRadius
+                        ) {
                             crashed = true
                             break
                         }
@@ -443,7 +487,10 @@ fun CurveGameScreen(
                         val oppSegEnd = opponentTrail[i + 1]
                         if (oppSegStart.isGap || oppSegEnd.isGap) continue
 
-                        if (distanceFromPointToSegment(next, oppSegStart.position, oppSegEnd.position) < collisionRadius) {
+                        if (distanceFromPointToSegment(
+                                next, oppSegStart.position, oppSegEnd.position
+                            ) < collisionRadius
+                        ) {
                             crashed = true
                             break
                         }
@@ -547,16 +594,14 @@ fun CurveGameScreen(
                         modifier = Modifier.padding(16.dp)
                     )
                     Text(
-                        text = connectionStatus,
-                        textAlign = TextAlign.Center
+                        text = connectionStatus, textAlign = TextAlign.Center
                     )
                 }
 
                 Spacer(modifier = Modifier.height(32.dp))
 
                 Button(
-                    onClick = onReturnToMenu,
-                    modifier = Modifier.fillMaxWidth()
+                    onClick = onReturnToMenu, modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Back to Menu")
                 }
@@ -609,26 +654,22 @@ fun CurveGameScreen(
                 modifier = Modifier
                     .matchParentSize()
                     .pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                if (!isRunning || isGameOver || !localIsAlive) return@detectTapGestures
-                                // Determine turn direction based on which side of screen was pressed
-                                localTurning = if (it.x < size.width / 2) -1f else 1f
-                                try {
-                                    awaitRelease() // Keep turning until finger is lifted
-                                } finally {
-                                    localTurning = 0f
-                                }
-                            },
-                            onDoubleTap = {
-                                //Boost
-                                if (!localIsAlive || localIsBoosting != 0) return@detectTapGestures
-                                localIsBoosting = 1
-                                localBoostFrames = 0
+                        detectTapGestures(onPress = {
+                            if (!isRunning || isGameOver || !localIsAlive || controlMode != ControlMode.TAP) return@detectTapGestures
+                            // Determine turn direction based on which side of screen was pressed
+                            localTurning = if (it.x < size.width / 2) -1f else 1f
+                            try {
+                                awaitRelease() // Keep turning until finger is lifted
+                            } finally {
+                                localTurning = 0f
                             }
-                        )
-                    }
-            )
+                        }, onDoubleTap = {
+                            //Boost
+                            if (!localIsAlive || localIsBoosting != 0) return@detectTapGestures
+                            localIsBoosting = 1
+                            localBoostFrames = 0
+                        })
+                    })
 
             // Game UI elements
             Column(
@@ -648,8 +689,7 @@ fun CurveGameScreen(
 
                 if (!isRunning || isGameOver) {
                     Button(
-                        onClick = onReturnToMenu,
-                        modifier = Modifier.padding(top = 8.dp)
+                        onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)
                     ) {
                         Text("Return to Menu")
                     }
@@ -697,12 +737,14 @@ fun CurveGameScreen(
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
+
                         1 -> Text(
                             text = "Boosting...",
                             color = Color.Magenta,
                             fontSize = 16.sp,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
+
                         2 -> Text(
                             text = "Boost ready in ${localBoostCooldownFrames / 60}s",
                             color = Color.Black,
@@ -734,37 +776,3 @@ fun distanceFromPointToSegment(p: Offset, a: Offset, b: Offset): Float {
 
 // Infix function for dot product of two Offsets
 infix fun Offset.dot(other: Offset): Float = this.x * other.x + this.y * other.y
-
-@Composable
-fun CurveApp(modifier: Modifier) {
-    val navController = rememberNavController()
-
-    NavHost(navController, startDestination = "menu") {
-        composable("menu") {
-            MenuScreen(onStartClick = { navController.navigate("game") })
-        }
-        composable("game") {
-            CurveGameScreen(
-                modifier = modifier,
-                onReturnToMenu = { navController.popBackStack("menu", inclusive = false) })
-        }
-    }
-}
-
-@Composable
-fun MenuScreen(onStartClick: () -> Unit) {
-    Box(
-        modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "Achtung, die Kurve!",
-                fontSize = 32.sp,
-                modifier = Modifier.padding(bottom = 32.dp)
-            )
-            Button(onClick = onStartClick) {
-                Text("Start Game")
-            }
-        }
-    }
-}
