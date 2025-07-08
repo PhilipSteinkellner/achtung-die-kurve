@@ -19,13 +19,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.viewmodel.compose.viewModel // Import for viewModel()
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.achtungdiekurve.data.ControlMode // Updated import for ControlMode
-import com.example.achtungdiekurve.game.GameViewModel // Import the new GameViewModel
-import com.example.achtungdiekurve.ui.CurveGameScreen // Updated import for CurveGameScreen (renamed from GameScreen)
+import com.example.achtungdiekurve.data.ControlMode
+import com.example.achtungdiekurve.game.GameViewModel
+import com.example.achtungdiekurve.ui.CurveGameScreen
 import com.example.achtungdiekurve.ui.MenuScreen
 import com.example.achtungdiekurve.ui.SettingsScreen
 import com.example.achtungdiekurve.ui.theme.AchtungDieKurveTheme
@@ -35,7 +35,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        checkPermissions() // Just handle permissions
+        checkPermissions()
 
         setContent {
             AchtungDieKurveTheme {
@@ -81,24 +81,34 @@ class MainActivity : ComponentActivity() {
 fun CurveApp(modifier: Modifier) {
     val navController = rememberNavController()
     var controlMode by rememberSaveable { mutableStateOf(ControlMode.TAP) }
+    val gameViewModel: GameViewModel = viewModel() // Obtain ViewModel at a higher scope
 
     NavHost(navController, startDestination = "menu") {
         composable("menu") {
             MenuScreen(
-                onStartClick = { navController.navigate("game") },
-                onSettingsClick = { navController.navigate("settings") })
+                onStartGame = { isSinglePlayer ->
+                    // The game mode is already set in the ViewModel by MenuScreen itself.
+                    // We just navigate to the game screen.
+                    navController.navigate("game")
+                },
+                onReturnToGame = {
+                    navController.navigate("game") {
+                        // Pop up to game to avoid multiple instances on back stack
+                        popUpTo("game") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                },
+                onSettingsClick = { navController.navigate("settings") },
+                gameViewModel = gameViewModel // Pass the ViewModel
+            )
         }
         composable("game") {
-            // Obtain the GameViewModel instance
-            val gameViewModel: GameViewModel = viewModel()
             CurveGameScreen(
                 modifier = modifier,
                 onReturnToMenu = {
                     // When returning to menu, ensure the GameViewModel is reset
                     // to show mode selection again if navigating back to game.
-                    // This is implicitly handled by the ViewModel lifecycle,
-                    // but you might want to explicitly reset if "game" is re-entered later.
-                    //gameViewModel.selectMultiplayerMode() // or a more generic reset for mode selection
+                    gameViewModel.resetGameModeSelection()
                     navController.popBackStack("menu", inclusive = false)
                 },
                 controlMode = controlMode,

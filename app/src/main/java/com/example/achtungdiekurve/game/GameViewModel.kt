@@ -41,9 +41,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             gameOverMessage = "",
             isHost = false,
             connectionStatus = "Not Connected",
-            showMultiplayerSetup = false, // Set to false initially, only true if Multiplayer is chosen
+            showMultiplayerSetup = false,
             connectedEndpointId = null,
-            isSinglePlayer = false, // Initialize as false
+            isSinglePlayer = false,
             showModeSelection = true // Start with mode selection
         )
     )
@@ -76,7 +76,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             _gameState.update {
                                 it.copy(
                                     connectionStatus = "Connected!",
-                                    showMultiplayerSetup = false,
+                                    showMultiplayerSetup = false, // Hide setup on successful connection
                                     connectedEndpointId = connectionState.endpointId
                                 )
                             }
@@ -87,7 +87,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             _gameState.update {
                                 it.copy(
                                     connectionStatus = "Disconnected",
-                                    showMultiplayerSetup = true,
+                                    showMultiplayerSetup = true, // Show setup on disconnect
                                     isRunning = false,
                                     connectedEndpointId = null
                                 )
@@ -131,8 +131,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         is ConnectionState.Connecting -> {
                             _gameState.update {
                                 it.copy(
-                                    connectionStatus = "Connecting...",
-                                    showMultiplayerSetup = true
+                                    connectionStatus = "Connecting...", showMultiplayerSetup = true
                                 )
                             }
                         }
@@ -168,12 +167,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         resetGame()
     }
 
+    fun resetGameModeSelection() {
+        _gameState.update {
+            it.copy(
+                showModeSelection = true,
+                showMultiplayerSetup = false,
+                isSinglePlayer = false,
+                isRunning = false, // Ensure game is not running when returning to menu
+                isGameOver = false,
+                gameOverMessage = "",
+                connectionStatus = "Not Connected"
+            )
+        }
+        stopGameLoop()
+        nearbyConnectionsManager.stopAllEndpoints() // Stop any ongoing connections
+        resetGame() // Reset game state fully
+    }
+
     // --- Nearby Connections Callbacks ---
     private fun onNearbyConnected(endpointId: String, isHost: Boolean) {
         _isHost = isHost
         _gameState.update {
             it.copy(
-                isHost = isHost, showModeSelection = false // Ensure mode selection is off
+                isHost = isHost, showModeSelection = false, // Ensure mode selection is off
+                showMultiplayerSetup = false // Hide multiplayer setup on connection
             )
         }
         resetGame() // Start fresh game after connection
@@ -264,7 +281,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 localBoostFrames = 0,
                 localBoostCooldownFrames = 0,
                 localIsAlive = true,
-                opponentTrail = opponentPlayerState.trail.toList(),
+                opponentTrail = opponentPlayerState.trail.toList(), // Make sure opponent's trail is also updated in state
                 opponentIsAlive = true,
                 isRunning = false, // Set to false initially, true when game loop starts
                 isGameOver = false,
@@ -299,8 +316,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             localPlayerState.direction = initialDirection
             _gameState.update {
                 it.copy(
-                    localTrail = localPlayerState.trail.toList(),
-                    localDirection = initialDirection
+                    localTrail = localPlayerState.trail.toList(), localDirection = initialDirection
                 )
             }
         }
@@ -356,9 +372,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (segStart.isGap || segEnd.isGap) continue
 
                 if (distanceFromPointToSegment(
-                        nextLocalPos,
-                        segStart.position,
-                        segEnd.position
+                        nextLocalPos, segStart.position, segEnd.position
                     ) < collisionRadius
                 ) {
                     crashed = true
@@ -376,9 +390,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (oppSegStart.isGap || oppSegEnd.isGap) continue
 
                 if (distanceFromPointToSegment(
-                        nextLocalPos,
-                        oppSegStart.position,
-                        oppSegEnd.position
+                        nextLocalPos, oppSegStart.position, oppSegEnd.position
                     ) < collisionRadius
                 ) {
                     crashed = true
@@ -487,8 +499,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             if (opponentPlayerState.trail.isEmpty() || (newOpponentPos - opponentPlayerState.trail.last().position).getDistance() > 1f) {
                                 opponentPlayerState.trail.add(
                                     TrailSegment(
-                                        newOpponentPos,
-                                        isGap = !receivedIsDrawing
+                                        newOpponentPos, isGap = !receivedIsDrawing
                                     )
                                 )
                             }

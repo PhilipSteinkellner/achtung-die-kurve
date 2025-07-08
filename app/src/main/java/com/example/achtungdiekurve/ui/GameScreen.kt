@@ -6,13 +6,10 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -40,7 +37,7 @@ fun CurveGameScreen(
     modifier: Modifier = Modifier,
     onReturnToMenu: () -> Unit,
     controlMode: ControlMode,
-    gameViewModel: GameViewModel = viewModel() // ViewModel provided by Hilt/Androidx lifecycle
+    gameViewModel: GameViewModel = viewModel()
 ) {
     val gameState by gameViewModel.gameState.collectAsState()
 
@@ -67,7 +64,7 @@ fun CurveGameScreen(
         gameState.isSinglePlayer
     ) {
         val canStartGameLoop =
-            gameState.isRunning && !gameState.isGameOver && gameState.localIsAlive && (gameState.isSinglePlayer || gameState.connectedEndpointId != null) // Condition updated for single/multiplayer
+            gameState.isRunning && !gameState.isGameOver && gameState.localIsAlive && (gameState.isSinglePlayer || gameState.connectedEndpointId != null)
 
         if (canStartGameLoop) {
             if (screenWidth > 0 && screenHeight > 0) {
@@ -86,7 +83,6 @@ fun CurveGameScreen(
         }
     }
 
-    // Cleanup on dispose - ensure ViewModel's onCleared is called if appropriate.
     DisposableEffect(LocalLifecycleOwner.current) {
         onDispose {
             // No explicit action needed here for ViewModel cleanup as it's lifecycle-managed.
@@ -94,256 +90,152 @@ fun CurveGameScreen(
         }
     }
 
-
+    // Game UI
     Box(modifier = Modifier.fillMaxSize()) {
-        if (gameState.showModeSelection) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = "Select Game Mode",
-                    fontSize = 24.sp,
-                    modifier = Modifier.padding(bottom = 32.dp)
-                )
-                Button(
-                    onClick = { gameViewModel.selectSinglePlayerMode() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                ) {
-                    Text("Single Player")
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            // Draw local player's trail
+            for (i in 1 until gameState.localTrail.size) {
+                val start = gameState.localTrail[i - 1]
+                val end = gameState.localTrail[i]
+                val color = when {
+                    !gameState.localIsAlive -> Color.Gray
+                    gameState.localIsBoosting == 1 -> Color.Magenta
+                    else -> if (gameState.isHost) Color.Red else Color.Green
                 }
-                Button(
-                    onClick = { gameViewModel.selectMultiplayerMode() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                ) {
-                    Text("Multiplayer")
-                }
-                Spacer(modifier = Modifier.height(32.dp))
-                Button(
-                    onClick = onReturnToMenu, modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Back to Menu")
+
+                if (!start.isGap && !end.isGap) {
+                    drawLine(
+                        color = color,
+                        start = start.position,
+                        end = end.position,
+                        strokeWidth = GameConstants.STROKE_WIDTH
+                    )
                 }
             }
-        } else if (gameState.showMultiplayerSetup) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = "Multiplayer Setup",
-                    fontSize = 24.sp,
-                    modifier = Modifier.padding(bottom = 32.dp)
-                )
 
-                Text(
-                    text = gameState.connectionStatus,
-                    fontSize = 16.sp,
-                    color = Color.Gray,
-                    modifier = Modifier.padding(bottom = 24.dp)
-                )
-
-                if (gameState.connectionStatus !in listOf(
-                        "Connecting...",
-                        "Waiting for players to join...",
-                        "Searching for games..."
-                    )
-                ) {
-                    Button(
-                        onClick = { gameViewModel.startHostingGame() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                    ) {
-                        Text("Host Game")
-                    }
-
-                    Button(
-                        onClick = { gameViewModel.startJoiningGame() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                    ) {
-                        Text("Join Game")
-                    }
-                } else {
-                    CircularProgressIndicator(
-                        modifier = Modifier.padding(16.dp)
-                    )
-                    Text(
-                        text = gameState.connectionStatus, textAlign = TextAlign.Center
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(32.dp))
-
-                Button(
-                    onClick = onReturnToMenu, modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Back to Menu")
-                }
-            }
-        } else {
-            // Game UI
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                // Draw local player's trail
-                for (i in 1 until gameState.localTrail.size) {
-                    val start = gameState.localTrail[i - 1]
-                    val end = gameState.localTrail[i]
-                    val color = when {
-                        !gameState.localIsAlive -> Color.Gray
-                        gameState.localIsBoosting == 1 -> Color.Magenta
-                        else -> if (gameState.isHost) Color.Red else Color.Green
+            // Draw opponent's trail (only in multiplayer)
+            if (!gameState.isSinglePlayer) {
+                for (i in 1 until gameState.opponentTrail.size) {
+                    val start = gameState.opponentTrail[i - 1]
+                    val end = gameState.opponentTrail[i]
+                    val opponentColor = when {
+                        !gameState.opponentIsAlive -> Color.Gray
+                        else -> if (gameState.isHost) Color.Green else Color.Red
                     }
 
                     if (!start.isGap && !end.isGap) {
                         drawLine(
-                            color = color,
+                            color = opponentColor,
                             start = start.position,
                             end = end.position,
                             strokeWidth = GameConstants.STROKE_WIDTH
                         )
                     }
                 }
-
-                // Draw opponent's trail (only in multiplayer)
-                if (!gameState.isSinglePlayer) {
-                    for (i in 1 until gameState.opponentTrail.size) {
-                        val start = gameState.opponentTrail[i - 1]
-                        val end = gameState.opponentTrail[i]
-                        val opponentColor = when {
-                            !gameState.opponentIsAlive -> Color.Gray
-                            else -> if (gameState.isHost) Color.Green else Color.Red
-                        }
-
-                        if (!start.isGap && !end.isGap) {
-                            drawLine(
-                                color = opponentColor,
-                                start = start.position,
-                                end = end.position,
-                                strokeWidth = GameConstants.STROKE_WIDTH
-                            )
-                        }
-                    }
-                }
             }
+        }
 
-            // Touch input for game controls (only for TAP mode)
-            if (controlMode == ControlMode.TAP) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .pointerInput(Unit) {
-                            detectTapGestures(onPress = {
-                                if (!gameState.isRunning || gameState.isGameOver || !gameState.localIsAlive) return@detectTapGestures
-                                // Determine turn direction based on which side of screen was pressed
-                                gameViewModel.setLocalTurning(if (it.x < size.width / 2) -1f else 1f)
-                                try {
-                                    awaitRelease() // Keep turning until finger is lifted
-                                } finally {
-                                    gameViewModel.setLocalTurning(0f)
-                                }
-                            }, onDoubleTap = {
-                                // Boost
-                                if (!gameState.localIsAlive || gameState.localIsBoosting != 0) return@detectTapGestures
-                                gameViewModel.toggleBoost()
-                            })
-                        })
-            }
-
-            // Game UI elements (Pause/Reset, Return to Menu)
-            Column(
-                modifier = modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Button(onClick = {
-                    if (gameState.isGameOver) {
-                        gameViewModel.resetGameRound()
-                    } else {
-                        gameViewModel.toggleGameRunning()
-                    }
-                }) {
-                    Text(if (gameState.isGameOver) "Reset" else if (gameState.isRunning) "Pause" else "Resume")
-                }
-
-                if (!gameState.isRunning || gameState.isGameOver) {
-                    Button(
-                        onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)
-                    ) {
-                        Text("Return to Menu")
-                    }
-                }
-            }
-
-            // Connection status indicator (adjusted for single player)
-            Text(
-                text = if (gameState.isSinglePlayer) "Mode: Single Player" else "Role: ${if (gameState.isHost) "Host (Red)" else "Client (Green)"} | ${gameState.connectionStatus}",
-                fontSize = 12.sp,
-                color = Color.Black,
+        // Touch input for game controls (only for TAP mode)
+            Box(
                 modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(8.dp)
-            )
+                    .matchParentSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onPress = {
+                            if (controlMode != ControlMode.TAP || !gameState.isRunning || gameState.isGameOver || !gameState.localIsAlive) return@detectTapGestures
+                            // Determine turn direction based on which side of screen was pressed
+                            gameViewModel.setLocalTurning(if (it.x < size.width / 2) -1f else 1f)
+                            try {
+                                awaitRelease() // Keep turning until finger is lifted
+                            } finally {
+                                gameViewModel.setLocalTurning(0f)
+                            }
+                        }, onDoubleTap = {
+                            // Boost
+                            if (!gameState.localIsAlive || gameState.localIsBoosting != 0) return@detectTapGestures
+                            gameViewModel.toggleBoost()
+                        })
+                    })
 
-            // Game Over message
-            if (gameState.isGameOver) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .align(Alignment.Center)
-                        .padding(horizontal = 32.dp), contentAlignment = Alignment.Center
-                ) {
-                    // You can add a background box here if needed for better contrast
-                    // e.g., Modifier.background(Color.Black.copy(alpha = 0.7f))
-                    Text(
-                        text = gameState.gameOverMessage,
-                        color = Color.Red,
-                        fontSize = 24.sp,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(16.dp)
-                    )
+
+        // Game UI elements (Pause/Reset, Return to Menu)
+        Column(
+            modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Button(onClick = {
+                if (gameState.isGameOver) {
+                    gameViewModel.resetGameRound()
+                } else {
+                    gameViewModel.toggleGameRunning()
                 }
+            }) {
+                Text(if (gameState.isGameOver) "Reset" else if (gameState.isRunning) "Pause" else "Resume")
             }
 
-            // Boost status
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Bottom
+            if (!gameState.isRunning || gameState.isGameOver) {
+                Button(
+                    onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text("Return to Menu")
+                }
+            }
+        }
+
+        // Connection status indicator (adjusted for single player)
+        Text(
+            text = if (gameState.isSinglePlayer) "Mode: Single Player" else "Role: ${if (gameState.isHost) "Host (Red)" else "Client (Green)"} | ${gameState.connectionStatus}",
+            fontSize = 12.sp,
+            color = Color.Black,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(8.dp)
+        )
+
+        // Game Over message
+        if (gameState.isGameOver) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .align(Alignment.Center)
+                    .padding(horizontal = 32.dp), contentAlignment = Alignment.Center
             ) {
-                if (gameState.localIsAlive) {
-                    when (gameState.localIsBoosting) {
-                        0 -> Text(
-                            text = "Boost Ready! (Double tap)",
-                            color = Color.Green,
-                            fontSize = 16.sp,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
+                Text(
+                    text = gameState.gameOverMessage,
+                    color = Color.Red,
+                    fontSize = 24.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+        }
 
-                        1 -> Text(
-                            text = "Boosting...",
-                            color = Color.Magenta,
-                            fontSize = 16.sp,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
+        // Boost status
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Bottom
+        ) {
+            if (gameState.localIsAlive) {
+                when (gameState.localIsBoosting) {
+                    0 -> Text(
+                        text = "Boost Ready! (Double tap)",
+                        color = Color.Green,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
 
-                        2 -> Text(
-                            text = "Boost ready in ${gameState.localBoostCooldownFrames / 60}s",
-                            color = Color.Black,
-                            fontSize = 16.sp,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                    }
+                    1 -> Text(
+                        text = "Boosting...",
+                        color = Color.Magenta,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    2 -> Text(
+                        text = "Boost ready in ${gameState.localBoostCooldownFrames / 60}s",
+                        color = Color.Black,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
                 }
             }
         }
