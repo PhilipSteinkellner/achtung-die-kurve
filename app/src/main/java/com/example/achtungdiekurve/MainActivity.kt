@@ -19,11 +19,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel // Import for viewModel()
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.achtungdiekurve.ui.ControlMode
-import com.example.achtungdiekurve.ui.CurveGameScreen
+import com.example.achtungdiekurve.data.ControlMode // Updated import for ControlMode
+import com.example.achtungdiekurve.game.GameViewModel // Import the new GameViewModel
+import com.example.achtungdiekurve.ui.CurveGameScreen // Updated import for CurveGameScreen (renamed from GameScreen)
 import com.example.achtungdiekurve.ui.MenuScreen
 import com.example.achtungdiekurve.ui.SettingsScreen
 import com.example.achtungdiekurve.ui.theme.AchtungDieKurveTheme
@@ -34,7 +36,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         checkPermissions() // Just handle permissions
-
 
         setContent {
             AchtungDieKurveTheme {
@@ -74,7 +75,6 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         // Handle permission results if needed
     }
-
 }
 
 @Composable
@@ -89,12 +89,21 @@ fun CurveApp(modifier: Modifier) {
                 onSettingsClick = { navController.navigate("settings") })
         }
         composable("game") {
+            // Obtain the GameViewModel instance
+            val gameViewModel: GameViewModel = viewModel()
             CurveGameScreen(
                 modifier = modifier,
-                onReturnToMenu = { navController.popBackStack("menu", inclusive = false) },
-                controlMode = controlMode
+                onReturnToMenu = {
+                    // When returning to menu, ensure the GameViewModel is reset
+                    // to show mode selection again if navigating back to game.
+                    // This is implicitly handled by the ViewModel lifecycle,
+                    // but you might want to explicitly reset if "game" is re-entered later.
+                    //gameViewModel.selectMultiplayerMode() // or a more generic reset for mode selection
+                    navController.popBackStack("menu", inclusive = false)
+                },
+                controlMode = controlMode,
+                gameViewModel = gameViewModel // Pass the ViewModel to the UI
             )
-
         }
         composable("settings") {
             SettingsScreen(selectedMode = controlMode, onSelectMode = { mode ->
@@ -102,8 +111,4 @@ fun CurveApp(modifier: Modifier) {
             }, onReturnToMenu = { navController.popBackStack("menu", inclusive = false) })
         }
     }
-
 }
-
-
-

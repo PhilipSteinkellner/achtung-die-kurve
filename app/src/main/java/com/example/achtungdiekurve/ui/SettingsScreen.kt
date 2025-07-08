@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.achtungdiekurve.data.ControlMode
 
 @Composable
 fun SettingsScreen(
@@ -56,9 +57,5 @@ fun SettingsScreen(
             Text("Back to Menu")
         }
     }
-}
-
-enum class ControlMode {
-    TILT, TAP
 }
 
