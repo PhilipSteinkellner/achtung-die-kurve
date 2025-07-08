@@ -28,6 +28,10 @@ enum class ControlMode {
     TAP, TILT
 }
 
+enum class BoostState {
+    READY, BOOSTING, COOLDOWN
+}
+
 // Data class to hold the full game state
 data class GameState(
     val localTrail: List<TrailSegment>,

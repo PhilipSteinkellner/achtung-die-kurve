@@ -54,7 +54,7 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         Button(onClick = onReturnToMenu) {
-            Text("Back to Menu")
+            Text("Menu")
         }
     }
 }

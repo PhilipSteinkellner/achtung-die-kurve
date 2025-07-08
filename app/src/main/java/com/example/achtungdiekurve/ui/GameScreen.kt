@@ -3,6 +3,7 @@ package com.example.achtungdiekurve.ui
 import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -136,25 +137,41 @@ fun CurveGameScreen(
         }
 
         // Touch input for game controls (only for TAP mode)
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(onPress = {
-                            if (controlMode != ControlMode.TAP || !gameState.isRunning || gameState.isGameOver || !gameState.localIsAlive) return@detectTapGestures
-                            // Determine turn direction based on which side of screen was pressed
-                            gameViewModel.setLocalTurning(if (it.x < size.width / 2) -1f else 1f)
-                            try {
-                                awaitRelease() // Keep turning until finger is lifted
-                            } finally {
-                                gameViewModel.setLocalTurning(0f)
-                            }
-                        }, onDoubleTap = {
-                            // Boost
-                            if (!gameState.localIsAlive || gameState.localIsBoosting != 0) return@detectTapGestures
-                            gameViewModel.toggleBoost()
-                        })
-                    })
+        Box(modifier = Modifier
+            .matchParentSize()
+            .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                    if (controlMode != ControlMode.TAP || !gameState.isRunning || gameState.isGameOver || !gameState.localIsAlive) return@detectTapGestures
+                    // Determine turn direction based on which side of screen was pressed
+                    gameViewModel.setLocalTurning(if (it.x < size.width / 2) -1f else 1f)
+                    try {
+                        awaitRelease() // Keep turning until finger is lifted
+                    } finally {
+                        gameViewModel.setLocalTurning(0f)
+                    }
+                })
+            }
+            .pointerInput(Unit) {
+                var totalDragAmount = 0f
+                detectVerticalDragGestures(onDragStart = { offset ->
+                    // Reset on new drag
+                    totalDragAmount = 0f
+                }, onVerticalDrag = { change, dragAmount ->
+                    totalDragAmount += dragAmount
+                    change.consume()
+                }, onDragEnd = {
+                    if (!gameState.localIsAlive || gameState.localIsBoosting != 0) return@detectVerticalDragGestures
+
+                    if (totalDragAmount < -GameConstants.SWIPE_THRESHOLD) {
+                        gameViewModel.toggleBoost()
+                    } else if (totalDragAmount > GameConstants.SWIPE_THRESHOLD) {
+                        // TODO: activate slow mode
+                    }
+                    totalDragAmount = 0f // Reset for the next gesture
+                }, onDragCancel = {
+                    totalDragAmount = 0f
+                })
+            })
 
 
         // Game UI elements (Pause/Reset, Return to Menu)
@@ -175,7 +192,7 @@ fun CurveGameScreen(
                 Button(
                     onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)
                 ) {
-                    Text("Return to Menu")
+                    Text("Menu")
                 }
             }
         }
@@ -217,7 +234,7 @@ fun CurveGameScreen(
             if (gameState.localIsAlive) {
                 when (gameState.localIsBoosting) {
                     0 -> Text(
-                        text = "Boost Ready! (Double tap)",
+                        text = "Boost Ready! (Swipe Up)",
                         color = Color.Green,
                         fontSize = 16.sp,
                         modifier = Modifier.padding(bottom = 8.dp)

@@ -131,32 +131,11 @@ fun MenuScreen(
                     onClick = { gameViewModel.resetGameModeSelection() },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Back to Mode Selection")
+                    Text("Menu")
                 }
             }
         } else {
-            // Initial Menu Screen
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "Achtung, die Kurve!",
-                    fontSize = 32.sp,
-                    modifier = Modifier.padding(bottom = 32.dp)
-                )
-                Button(onClick = { gameViewModel.resetGameModeSelection() }) { // Trigger mode selection
-                    Text("Start Game")
-                }
-                Button(onClick = onSettingsClick) {
-                    Text("Settings")
-                }
-                // Add a button to return to a running game if applicable
-                if (gameState.isRunning || gameState.isGameOver) {
-                    Button(
-                        onClick = onReturnToGame, modifier = Modifier.padding(top = 8.dp)
-                    ) {
-                        Text("Return to Game")
-                    }
-                }
-            }
+            onStartGame(false)
         }
     }
 }
