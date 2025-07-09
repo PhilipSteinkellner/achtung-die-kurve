@@ -30,7 +30,7 @@ fun MenuScreen(
     onSettingsClick: () -> Unit,
     gameViewModel: GameViewModel = viewModel()
 ) {
-    val gameState by gameViewModel.gameState.collectAsState()
+    val gameState by gameViewModel.uiState.collectAsState()
 
     Box(
         modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
@@ -74,7 +74,7 @@ fun MenuScreen(
                     Text("Settings")
                 }
             }
-        } else if (gameState.showMultiplayerSetup) {
+        } else if (gameState.multiplayerState.showSetupScreen) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -89,13 +89,13 @@ fun MenuScreen(
                 )
 
                 Text(
-                    text = gameState.connectionStatus,
+                    text = gameState.multiplayerState.connectionStatus,
                     fontSize = 16.sp,
                     color = Color.Gray,
                     modifier = Modifier.padding(bottom = 24.dp)
                 )
 
-                if (gameState.connectionStatus !in listOf(
+                if (gameState.multiplayerState.connectionStatus !in listOf(
                         "Connecting...", "Waiting for players to join...", "Searching for games..."
                     )
                 ) {
@@ -121,7 +121,7 @@ fun MenuScreen(
                         modifier = Modifier.padding(16.dp)
                     )
                     Text(
-                        text = gameState.connectionStatus, textAlign = TextAlign.Center
+                        text = gameState.multiplayerState.connectionStatus, textAlign = TextAlign.Center
                     )
                 }
 

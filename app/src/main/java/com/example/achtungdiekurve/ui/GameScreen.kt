@@ -13,23 +13,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.achtungdiekurve.data.BoostState
 import com.example.achtungdiekurve.data.ControlMode
 import com.example.achtungdiekurve.data.GameConstants
+import com.example.achtungdiekurve.data.PlayerUiState
 import com.example.achtungdiekurve.game.GameViewModel
 import com.example.achtungdiekurve.game.rememberAccelerometerSensorHandler
 
@@ -40,14 +41,15 @@ fun CurveGameScreen(
     controlMode: ControlMode,
     gameViewModel: GameViewModel = viewModel()
 ) {
-    val gameState by gameViewModel.gameState.collectAsState()
+    val uiState by gameViewModel.uiState.collectAsState()
+    val localPlayer = uiState.localPlayer
+    val opponentPlayer = uiState.opponentPlayer
+    val multiplayerState = uiState.multiplayerState
 
     val screenWidth = LocalWindowInfo.current.containerSize.width
     val screenHeight = LocalWindowInfo.current.containerSize.height
     val density = LocalDensity.current
 
-    // Initialize game positions when screen dimensions are available and game is not running
-    // This is called regardless of game mode, as both need initial positions
     LaunchedEffect(screenWidth, screenHeight) {
         if (screenWidth > 0 && screenHeight > 0) {
             gameViewModel.initializeGamePositions(
@@ -56,16 +58,13 @@ fun CurveGameScreen(
         }
     }
 
-    // Start game loop when conditions are met
     LaunchedEffect(
-        gameState.isRunning,
-        gameState.isGameOver,
-        gameState.localIsAlive,
-        gameState.connectedEndpointId,
-        gameState.isSinglePlayer
+        uiState.isRunning,
+        uiState.isGameOver,
+        localPlayer.isAlive,
+        multiplayerState.isMultiplayer
     ) {
-        val canStartGameLoop =
-            gameState.isRunning && !gameState.isGameOver && gameState.localIsAlive && (gameState.isSinglePlayer || gameState.connectedEndpointId != null)
+        val canStartGameLoop = uiState.isRunning && !uiState.isGameOver && localPlayer.isAlive
 
         if (canStartGameLoop) {
             if (screenWidth > 0 && screenHeight > 0) {
@@ -84,74 +83,27 @@ fun CurveGameScreen(
         }
     }
 
-    DisposableEffect(LocalLifecycleOwner.current) {
-        onDispose {
-            // No explicit action needed here for ViewModel cleanup as it's lifecycle-managed.
-            // gameViewModel.onCleared() is called by the ViewModel system when it's no longer needed.
-        }
-    }
-
-    // Game UI
-    Box(modifier = Modifier.fillMaxSize()) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            // Draw local player's trail
-            for (i in 1 until gameState.localTrail.size) {
-                val start = gameState.localTrail[i - 1]
-                val end = gameState.localTrail[i]
-                val color = when {
-                    !gameState.localIsAlive -> Color.Gray
-                    gameState.localIsBoosting == 1 -> Color.Magenta
-                    else -> if (gameState.isHost) Color.Red else Color.Green
-                }
-
-                if (!start.isGap && !end.isGap) {
-                    drawLine(
-                        color = color,
-                        start = start.position,
-                        end = end.position,
-                        strokeWidth = GameConstants.STROKE_WIDTH
-                    )
-                }
-            }
-
-            // Draw opponent's trail (only in multiplayer)
-            if (!gameState.isSinglePlayer) {
-                for (i in 1 until gameState.opponentTrail.size) {
-                    val start = gameState.opponentTrail[i - 1]
-                    val end = gameState.opponentTrail[i]
-                    val opponentColor = when {
-                        !gameState.opponentIsAlive -> Color.Gray
-                        else -> if (gameState.isHost) Color.Green else Color.Red
-                    }
-
-                    if (!start.isGap && !end.isGap) {
-                        drawLine(
-                            color = opponentColor,
-                            start = start.position,
-                            end = end.position,
-                            strokeWidth = GameConstants.STROKE_WIDTH
-                        )
-                    }
-                }
-            }
-        }
-
-        // Touch input for game controls (only for TAP mode)
-        Box(modifier = Modifier
-            .matchParentSize()
-            .pointerInput(Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(
+                controlMode,
+                uiState.isRunning,
+                uiState.isGameOver,
+                localPlayer.isAlive,
+                localPlayer.boostState
+            ) {
                 detectTapGestures(onPress = {
-                    if (controlMode != ControlMode.TAP || !gameState.isRunning || gameState.isGameOver || !gameState.localIsAlive) return@detectTapGestures
-                    // Determine turn direction based on which side of screen was pressed
+                    if (controlMode != ControlMode.TAP || !uiState.isRunning || uiState.isGameOver || !localPlayer.isAlive) return@detectTapGestures
                     gameViewModel.setLocalTurning(if (it.x < size.width / 2) -1f else 1f)
                     try {
-                        awaitRelease() // Keep turning until finger is lifted
+                        awaitRelease()
                     } finally {
                         gameViewModel.setLocalTurning(0f)
                     }
                 })
             }
-            .pointerInput(Unit) {
+            .pointerInput(localPlayer.isAlive, localPlayer.boostState) {
                 var totalDragAmount = 0f
                 detectVerticalDragGestures(onDragStart = { offset ->
                     // Reset on new drag
@@ -160,7 +112,7 @@ fun CurveGameScreen(
                     totalDragAmount += dragAmount
                     change.consume()
                 }, onDragEnd = {
-                    if (!gameState.localIsAlive || gameState.localIsBoosting != 0) return@detectVerticalDragGestures
+                    if (!localPlayer.isAlive || localPlayer.boostState != BoostState.READY) return@detectVerticalDragGestures
 
                     if (totalDragAmount < -GameConstants.SWIPE_THRESHOLD) {
                         gameViewModel.toggleBoost()
@@ -171,90 +123,121 @@ fun CurveGameScreen(
                 }, onDragCancel = {
                     totalDragAmount = 0f
                 })
-            })
-
-
-        // Game UI elements (Pause/Reset, Return to Menu)
-        Column(
-            modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Button(onClick = {
-                if (gameState.isGameOver) {
-                    gameViewModel.resetGameRound()
-                } else {
-                    gameViewModel.toggleGameRunning()
-                }
             }) {
-                Text(if (gameState.isGameOver) "Reset" else if (gameState.isRunning) "Pause" else "Resume")
-            }
-
-            if (!gameState.isRunning || gameState.isGameOver) {
-                Button(
-                    onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)
-                ) {
-                    Text("Menu")
-                }
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            drawPlayerTrail(localPlayer)
+            if (multiplayerState.isMultiplayer) {
+                drawPlayerTrail(opponentPlayer)
             }
         }
 
-        // Connection status indicator (adjusted for single player)
-        Text(
-            text = if (gameState.isSinglePlayer) "Mode: Single Player" else "Role: ${if (gameState.isHost) "Host (Red)" else "Client (Green)"} | ${gameState.connectionStatus}",
-            fontSize = 12.sp,
-            color = Color.Black,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(8.dp)
+        GameHud(
+            modifier = modifier,
+            uiState = uiState,
+            onPauseResumeClick = { gameViewModel.toggleGameRunning() },
+            onResetClick = {
+                gameViewModel.resetGameRound()
+                gameViewModel.initializeGamePositions(
+                    with(density) { screenWidth.toFloat() },
+                    with(density) { screenHeight.toFloat() })
+            },
+            onReturnToMenu = onReturnToMenu
         )
+    }
+}
 
-        // Game Over message
-        if (gameState.isGameOver) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .align(Alignment.Center)
-                    .padding(horizontal = 32.dp), contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = gameState.gameOverMessage,
-                    color = Color.Red,
-                    fontSize = 24.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
+private fun DrawScope.drawPlayerTrail(playerState: PlayerUiState) {
+    for (i in 1 until playerState.trail.size) {
+        val start = playerState.trail[i - 1]
+        val end = playerState.trail[i]
+        if (!start.isGap && !end.isGap) {
+            drawLine(
+                color = playerState.color,
+                start = start.position,
+                end = end.position,
+                strokeWidth = GameConstants.STROKE_WIDTH
+            )
+        }
+    }
+}
+
+@Composable
+fun GameHud(
+    modifier: Modifier,
+    uiState: com.example.achtungdiekurve.data.GameUiState,
+    onPauseResumeClick: () -> Unit,
+    onResetClick: () -> Unit,
+    onReturnToMenu: () -> Unit
+) {
+    val multiplayerState = uiState.multiplayerState
+
+    // Pause/Reset/Menu Buttons
+    Column(
+        modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Button(onClick = { if (uiState.isGameOver) onResetClick() else onPauseResumeClick() }) {
+            Text(if (uiState.isGameOver) "Reset" else if (uiState.isRunning) "Pause" else "Resume")
         }
 
-        // Boost status
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Bottom
+        if (!uiState.isRunning || uiState.isGameOver) {
+            Button(onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Menu")
+            }
+        }
+    }
+
+    // Status Text
+    Text(
+        text = if (!multiplayerState.isMultiplayer) "Mode: Single Player"
+        else "Role: ${if (multiplayerState.isHost) "Host (Red)" else "Client (Green)"} | ${multiplayerState.connectionStatus}",
+        fontSize = 12.sp,
+        color = Color.Black,
+        modifier = Modifier.padding(8.dp)
+    )
+
+    // Game Over Message
+    if (uiState.isGameOver) {
+        Box(
+            modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
         ) {
-            if (gameState.localIsAlive) {
-                when (gameState.localIsBoosting) {
-                    0 -> Text(
-                        text = "Boost Ready! (Swipe Up)",
-                        color = Color.Green,
-                        fontSize = 16.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-
-                    1 -> Text(
-                        text = "Boosting...",
-                        color = Color.Magenta,
-                        fontSize = 16.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-
-                    2 -> Text(
-                        text = "Boost ready in ${gameState.localBoostCooldownFrames / 60}s",
-                        color = Color.Black,
-                        fontSize = 16.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
-            }
+            Text(
+                text = uiState.gameOverMessage,
+                color = Color.Red,
+                fontSize = 24.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(16.dp)
+            )
         }
+    }
+
+    // Boost Status
+    if (uiState.localPlayer.isAlive) {
+        BoostStatus(
+            boostState = uiState.localPlayer.boostState,
+            cooldownFrames = uiState.localPlayer.boostCooldownFrames
+        )
+    }
+}
+
+@Composable
+fun BoostStatus(boostState: BoostState, cooldownFrames: Int) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Bottom
+    ) {
+        val (text, color) = when (boostState) {
+            BoostState.READY -> "Boost Ready! (Swipe Up)" to Color.Green
+            BoostState.BOOSTING -> "Boosting..." to Color.Magenta
+            BoostState.COOLDOWN -> "Boost ready in ${cooldownFrames / 60}s" to Color.Black
+        }
+        Text(
+            text = text,
+            color = color,
+            fontSize = 16.sp,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
     }
 }
