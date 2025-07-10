@@ -238,7 +238,7 @@ fun BoostStatus(boostState: BoostState, cooldownFrames: Int) {
         verticalArrangement = Arrangement.Bottom
     ) {
         val (text, color) = when (boostState) {
-            BoostState.READY -> "Boost Ready! (Swipe Up)" to Color.Green
+            BoostState.READY -> "Boost Ready! (Swipe Up/Down)" to Color.Green
             BoostState.BOOSTING -> "Boosting..." to Color.Magenta
             BoostState.BRAKING -> "Braking..." to Color.Magenta
             BoostState.COOLDOWN -> "Boost ready in ${cooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).toInt()}s" to Color.Black
