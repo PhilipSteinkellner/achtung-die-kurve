@@ -64,11 +64,11 @@ class NearbyConnectionsManager(
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
             _connectionState.update { ConnectionState.Status("Connection initiated with: ${info.endpointName}") }
             connectionsClient.acceptConnection(endpointId, payloadCallback).addOnSuccessListener {
-                    _connectionState.update { ConnectionState.Status("Accepting connection from: ${info.endpointName}") }
-                }.addOnFailureListener { e ->
-                    _connectionState.update { ConnectionState.Error("Failed to accept connection: ${e.message}") }
-                    stopAllEndpoints()
-                }
+                _connectionState.update { ConnectionState.Status("Accepting connection from: ${info.endpointName}") }
+            }.addOnFailureListener { e ->
+                _connectionState.update { ConnectionState.Error("Failed to accept connection: ${e.message}") }
+                stopAllEndpoints()
+            }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {

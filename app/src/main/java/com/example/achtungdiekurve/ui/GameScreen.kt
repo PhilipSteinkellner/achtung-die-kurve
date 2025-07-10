@@ -53,8 +53,7 @@ fun CurveGameScreen(
     val localWindow = LocalWindowInfo.current
 
     LaunchedEffect(
-        LocalWindowInfo.current.containerSize.width,
-        LocalWindowInfo.current.containerSize.height
+        LocalWindowInfo.current.containerSize.width, LocalWindowInfo.current.containerSize.height
     ) {
         val currentScreenWidthPx = with(density) { localWindow.containerSize.width.toFloat() }
         val currentScreenHeightPx = with(density) { localWindow.containerSize.height.toFloat() }

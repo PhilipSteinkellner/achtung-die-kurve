@@ -121,7 +121,8 @@ fun MenuScreen(
                         modifier = Modifier.padding(16.dp)
                     )
                     Text(
-                        text = gameState.multiplayerState.connectionStatus, textAlign = TextAlign.Center
+                        text = gameState.multiplayerState.connectionStatus,
+                        textAlign = TextAlign.Center
                     )
                 }
 

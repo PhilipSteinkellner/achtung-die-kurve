@@ -97,7 +97,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(multiplayerState = newMultiplayerState) }
     }
 
-    // --- Mode Selection ---
     fun selectSinglePlayerMode() {
         _uiState.update {
             it.copy(
@@ -213,12 +212,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startHostingGame() {
-        if (!_uiState.value.multiplayerState.isMultiplayer) return
+        if (!isMultiplayer()) return
         nearbyConnectionsManager.startHosting()
     }
 
     fun startJoiningGame() {
-        if (!_uiState.value.multiplayerState.isMultiplayer) return
+        if (!isMultiplayer()) return
         nearbyConnectionsManager.startDiscovery()
     }
 
@@ -240,9 +239,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun initializeGamePositions(screenWidthPx: Float, screenHeightPx: Float) {
 
-        val isHost = _uiState.value.multiplayerState.isHost
-
-        if (!isHost) return
+        if (!isHost()) return
 
         // Update screen dimensions in UI state
         _uiState.update {
@@ -253,8 +250,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // Only initialize if trails are empty to prevent re-initialization on config changes
         if (hostPlayerState.trail.isNotEmpty() || clientPlayerState.trail.isNotEmpty()) return
-
-        _uiState.value.multiplayerState.isMultiplayer
 
         fun randomOffset(): Offset {
             val x =
@@ -280,12 +275,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Update UI based on who 'local' and 'opponent' are for this device
         _uiState.update {
             it.copy(
-                localPlayer = if (isHost) hostPlayerState.toUiState(
+                localPlayer = hostPlayerState.toUiState(
                     true, true
-                ) else clientPlayerState.toUiState(false, true),
-                opponentPlayer = if (isHost) clientPlayerState.toUiState(
+                ), opponentPlayer = clientPlayerState.toUiState(
                     false, true
-                ) else hostPlayerState.toUiState(true, true)
+                )
             )
         }
 
@@ -293,7 +287,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startGameLoop(screenWidthPx: Float, screenHeightPx: Float) {
         if (gameLoopJob?.isActive == true) return
-        if (_uiState.value.multiplayerState.isMultiplayer && !_uiState.value.multiplayerState.isHost) {
+        if (!isHost()) {
             // Clients do not run the game loop directly
             return
         }
@@ -336,8 +330,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             ) // Client's input already applied by handler
         }
 
-        val isHost = _uiState.value.multiplayerState.isHost
-
         // Check for collisions AFTER all players have moved
         // Host collision check for self
         if (hostPlayerState.isAlive && checkForCollisions(
@@ -376,10 +368,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Update UI based on roles
         _uiState.update {
             it.copy(
-                localPlayer = if (isHost) hostPlayerState.toUiState(
+                localPlayer = if (isHost()) hostPlayerState.toUiState(
                     true, it.multiplayerState.isMultiplayer
                 ) else clientPlayerState.toUiState(false, it.multiplayerState.isMultiplayer),
-                opponentPlayer = if (isHost) clientPlayerState.toUiState(
+                opponentPlayer = if (isHost()) clientPlayerState.toUiState(
                     false, it.multiplayerState.isMultiplayer
                 ) else hostPlayerState.toUiState(true, it.multiplayerState.isMultiplayer)
             )
@@ -539,8 +531,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun handleGameStateSync(data: String) {
-        val isHost = _uiState.value.multiplayerState.isHost
-        if (isHost) return // Host doesn't process incoming game state syncs
+        if (isHost()) return // Host doesn't process incoming game state syncs
 
         try {
             val playerStates = data.split(";")
@@ -628,7 +619,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleGameOver(crashedByLocal: Boolean, crashedByOpponent: Boolean) {
         stopGameLoop()
         val isSinglePlayer = !_uiState.value.multiplayerState.isMultiplayer
-        val isHost = _uiState.value.multiplayerState.isHost
 
         val message = when {
             isSinglePlayer -> "Game Over! You crashed!"
@@ -636,10 +626,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             // In multiplayer, 'local' refers to the player controlled by THIS device.
             // On host: crashedByLocal is hostPlayerState, crashedByOpponent is clientPlayerState
             // On client: crashedByLocal is clientPlayerState, crashedByOpponent is hostPlayerState
-            isHost && crashedByLocal -> "You Lose! You crashed!"
-            isHost && crashedByOpponent -> "You Win! Opponent crashed!"
-            !isHost && crashedByLocal -> "You Lose! You crashed!"
-            !isHost && crashedByOpponent -> "You Win! Opponent crashed!"
+            isHost() && crashedByLocal -> "You Lose! You crashed!"
+            isHost() && crashedByOpponent -> "You Win! Opponent crashed!"
+            !isHost() && crashedByLocal -> "You Lose! You crashed!"
+            !isHost() && crashedByOpponent -> "You Win! Opponent crashed!"
             else -> "Game Over!" // Fallback
         }
 
@@ -647,10 +637,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 isGameOver = true,
                 gameOverMessage = message,
-                localPlayer = if (isHost) hostPlayerState.toUiState(
+                localPlayer = if (isHost()) hostPlayerState.toUiState(
                     true, true
                 ) else clientPlayerState.toUiState(false, true),
-                opponentPlayer = if (isHost) clientPlayerState.toUiState(
+                opponentPlayer = if (isHost()) clientPlayerState.toUiState(
                     false, true
                 ) else hostPlayerState.toUiState(true, true)
             )
