@@ -42,7 +42,10 @@ data class GameUiState(
     val isRunning: Boolean = false,
     val isGameOver: Boolean = false,
     val gameOverMessage: String = "",
-    val showModeSelection: Boolean = true
+    val showModeSelection: Boolean = true,
+    val screenWidthPx: Float = 0f, // New field
+    val screenHeightPx: Float = 0f // New field
+
 )
 
 // Internal data class to hold the full state of a player for game logic

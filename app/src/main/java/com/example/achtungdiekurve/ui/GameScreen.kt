@@ -30,6 +30,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.achtungdiekurve.data.BoostState
 import com.example.achtungdiekurve.data.ControlMode
 import com.example.achtungdiekurve.data.GameConstants
+import com.example.achtungdiekurve.data.GameUiState
 import com.example.achtungdiekurve.data.PlayerUiState
 import com.example.achtungdiekurve.game.GameViewModel
 import com.example.achtungdiekurve.game.rememberAccelerometerSensorHandler
@@ -45,32 +46,38 @@ fun CurveGameScreen(
     val localPlayer = uiState.localPlayer
     val opponentPlayer = uiState.opponentPlayer
     val multiplayerState = uiState.multiplayerState
+    val screenWidthPx = uiState.screenWidthPx
+    val screenHeightPx = uiState.screenHeightPx
 
-    val screenWidth = LocalWindowInfo.current.containerSize.width
-    val screenHeight = LocalWindowInfo.current.containerSize.height
     val density = LocalDensity.current
+    val localWindow = LocalWindowInfo.current
 
-    LaunchedEffect(screenWidth, screenHeight) {
-        if (screenWidth > 0 && screenHeight > 0) {
-            gameViewModel.initializeGamePositions(
-                with(density) { screenWidth.toFloat() },
-                with(density) { screenHeight.toFloat() })
+    LaunchedEffect(
+        LocalWindowInfo.current.containerSize.width,
+        LocalWindowInfo.current.containerSize.height
+    ) {
+        val currentScreenWidthPx = with(density) { localWindow.containerSize.width.toFloat() }
+        val currentScreenHeightPx = with(density) { localWindow.containerSize.height.toFloat() }
+
+        if (currentScreenWidthPx > 0 && currentScreenHeightPx > 0) {
+            gameViewModel.initializeGamePositions(currentScreenWidthPx, currentScreenHeightPx)
         }
     }
 
     LaunchedEffect(
         uiState.isRunning,
         uiState.isGameOver,
-        localPlayer.isAlive,
-        multiplayerState.isMultiplayer
+        multiplayerState.isHost,
+        multiplayerState.isMultiplayer,
+        screenWidthPx,
+        screenHeightPx
     ) {
-        val canStartGameLoop = uiState.isRunning && !uiState.isGameOver && localPlayer.isAlive
+        val shouldStartGameLoop =
+            uiState.isRunning && !uiState.isGameOver && ((multiplayerState.isMultiplayer && multiplayerState.isHost) || !multiplayerState.isMultiplayer)
 
-        if (canStartGameLoop) {
-            if (screenWidth > 0 && screenHeight > 0) {
-                gameViewModel.startGameLoop(
-                    with(density) { screenWidth.toFloat() },
-                    with(density) { screenHeight.toFloat() })
+        if (shouldStartGameLoop) {
+            if (screenWidthPx > 0 && screenHeightPx > 0) {
+                gameViewModel.startGameLoop(screenWidthPx, screenHeightPx)
             } else {
                 Log.w("GameScreen", "Screen dimensions not yet available for game loop.")
             }
@@ -95,6 +102,7 @@ fun CurveGameScreen(
             ) {
                 detectTapGestures(onPress = {
                     if (controlMode != ControlMode.TAP || !uiState.isRunning || uiState.isGameOver || !localPlayer.isAlive) return@detectTapGestures
+
                     gameViewModel.setLocalTurning(if (it.x < size.width / 2) -1f else 1f)
                     try {
                         awaitRelease()
@@ -103,23 +111,22 @@ fun CurveGameScreen(
                     }
                 })
             }
-            .pointerInput(localPlayer.isAlive, localPlayer.boostState) {
+            .pointerInput(localPlayer.isAlive, localPlayer.boostState, uiState.isRunning) {
                 var totalDragAmount = 0f
                 detectVerticalDragGestures(onDragStart = { offset ->
-                    // Reset on new drag
                     totalDragAmount = 0f
                 }, onVerticalDrag = { change, dragAmount ->
                     totalDragAmount += dragAmount
                     change.consume()
                 }, onDragEnd = {
-                    if (!localPlayer.isAlive || localPlayer.boostState != BoostState.READY) return@detectVerticalDragGestures
+                    if (!uiState.isRunning || !localPlayer.isAlive || localPlayer.boostState != BoostState.READY) return@detectVerticalDragGestures
 
                     if (totalDragAmount < -GameConstants.SWIPE_THRESHOLD) {
                         gameViewModel.toggleBoost()
                     } else if (totalDragAmount > GameConstants.SWIPE_THRESHOLD) {
-                        // TODO: activate slow mode
+                        // TODO: activate slow mode (if implemented, send to host)
                     }
-                    totalDragAmount = 0f // Reset for the next gesture
+                    totalDragAmount = 0f
                 }, onDragCancel = {
                     totalDragAmount = 0f
                 })
@@ -137,9 +144,7 @@ fun CurveGameScreen(
             onPauseResumeClick = { gameViewModel.toggleGameRunning() },
             onResetClick = {
                 gameViewModel.resetGameRound()
-                gameViewModel.initializeGamePositions(
-                    with(density) { screenWidth.toFloat() },
-                    with(density) { screenHeight.toFloat() })
+                gameViewModel.initializeGamePositions(screenWidthPx, screenHeightPx)
             },
             onReturnToMenu = onReturnToMenu
         )
@@ -164,20 +169,28 @@ private fun DrawScope.drawPlayerTrail(playerState: PlayerUiState) {
 @Composable
 fun GameHud(
     modifier: Modifier,
-    uiState: com.example.achtungdiekurve.data.GameUiState,
+    uiState: GameUiState,
     onPauseResumeClick: () -> Unit,
     onResetClick: () -> Unit,
     onReturnToMenu: () -> Unit
 ) {
     val multiplayerState = uiState.multiplayerState
 
-    // Pause/Reset/Menu Buttons
     Column(
         modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Button(onClick = { if (uiState.isGameOver) onResetClick() else onPauseResumeClick() }) {
-            Text(if (uiState.isGameOver) "Reset" else if (uiState.isRunning) "Pause" else "Resume")
+        if (uiState.isGameOver && (uiState.multiplayerState.isHost || !uiState.multiplayerState.isMultiplayer)) {
+            Button(onClick = onResetClick) {
+                Text("Reset")
+            }
         }
+
+        if (!uiState.isGameOver) {
+            Button(onClick = onPauseResumeClick) {
+                Text(if (uiState.isRunning) "Pause" else "Resume")
+            }
+        }
+
 
         if (!uiState.isRunning || uiState.isGameOver) {
             Button(onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)) {
@@ -186,7 +199,6 @@ fun GameHud(
         }
     }
 
-    // Status Text
     Text(
         text = if (!multiplayerState.isMultiplayer) "Mode: Single Player"
         else "Role: ${if (multiplayerState.isHost) "Host (Red)" else "Client (Green)"} | ${multiplayerState.connectionStatus}",
@@ -195,14 +207,13 @@ fun GameHud(
         modifier = Modifier.padding(8.dp)
     )
 
-    // Game Over Message
     if (uiState.isGameOver) {
         Box(
             modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
         ) {
             Text(
                 text = uiState.gameOverMessage,
-                color = Color.Red,
+                color = Color.Black,
                 fontSize = 24.sp,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(16.dp)
@@ -210,7 +221,6 @@ fun GameHud(
         }
     }
 
-    // Boost Status
     if (uiState.localPlayer.isAlive) {
         BoostStatus(
             boostState = uiState.localPlayer.boostState,
@@ -231,7 +241,7 @@ fun BoostStatus(boostState: BoostState, cooldownFrames: Int) {
         val (text, color) = when (boostState) {
             BoostState.READY -> "Boost Ready! (Swipe Up)" to Color.Green
             BoostState.BOOSTING -> "Boosting..." to Color.Magenta
-            BoostState.COOLDOWN -> "Boost ready in ${cooldownFrames / 60}s" to Color.Black
+            BoostState.COOLDOWN -> "Boost ready in ${cooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).toInt()}s" to Color.Black
         }
         Text(
             text = text,

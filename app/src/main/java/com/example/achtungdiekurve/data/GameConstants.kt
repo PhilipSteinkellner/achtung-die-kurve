@@ -13,4 +13,6 @@ object GameConstants {
     const val COLLISION_RADIUS_MULTIPLIER = 0.5f // strokeWidth / 2f
     const val TILT_THRESHOLD = 2
     const val SWIPE_THRESHOLD = 200f
+    const val MIN_SEGMENTS_FOR_SELF_COLLISION = 5
+    const val SPAWN_MARGIN = 100f
 }
