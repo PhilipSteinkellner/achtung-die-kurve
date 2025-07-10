@@ -14,7 +14,7 @@ enum class ControlMode {
 
 // Enum for the player's boost state
 enum class BoostState {
-    READY, BOOSTING, COOLDOWN
+    READY, BOOSTING, BRAKING, COOLDOWN
 }
 
 // Data class for player-specific state that is relevant to the UI

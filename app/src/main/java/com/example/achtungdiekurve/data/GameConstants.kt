@@ -2,6 +2,7 @@ package com.example.achtungdiekurve.data
 
 object GameConstants {
     const val BOOST_DURATION_FRAMES = 100
+    const val BRAKING_SPEED = 1f
     const val NORMAL_SPEED = 2f
     const val BOOSTED_SPEED = 4f
     const val BOOST_COOLDOWN_DURATION_FRAMES = 500
@@ -14,5 +15,5 @@ object GameConstants {
     const val TILT_THRESHOLD = 2
     const val SWIPE_THRESHOLD = 200f
     const val MIN_SEGMENTS_FOR_SELF_COLLISION = 5
-    const val SPAWN_MARGIN = 100f
+    const val SPAWN_MARGIN = 200f
 }

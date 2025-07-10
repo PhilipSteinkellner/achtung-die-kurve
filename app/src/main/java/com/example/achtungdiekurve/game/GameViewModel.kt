@@ -163,21 +163,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleBoost() {
+    fun toggleBoost(mode: BoostState) {
         if (isHost()) {
             // Host toggles its own boost
             if (hostPlayerState.isAlive && hostPlayerState.boostState == BoostState.READY) {
-                hostPlayerState.boostState = BoostState.BOOSTING
+                hostPlayerState.boostState = mode
                 hostPlayerState.boostFrames = 0
             }
         } else {
             // Client sends boost toggle to host
             if (clientPlayerState.isAlive && clientPlayerState.boostState == BoostState.READY) {
                 // Client's boost state is speculative until confirmed by host, but update locally for responsiveness
-                clientPlayerState.boostState = BoostState.BOOSTING
+                clientPlayerState.boostState = mode
                 clientPlayerState.boostFrames = 0
                 connectedEndpointId?.let { endpoint ->
-                    nearbyConnectionsManager.sendGameData("client_input:boost_toggle")
+                    nearbyConnectionsManager.sendGameData("client_input:boost:$mode")
                 }
             }
         }
@@ -276,9 +276,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 localPlayer = hostPlayerState.toUiState(
-                    true, true
+                    true,
                 ), opponentPlayer = clientPlayerState.toUiState(
-                    false, true
+                    false,
                 )
             )
         }
@@ -320,13 +320,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // Update Host's player state
         if (hostPlayerState.isAlive) {
-            updatePlayerState(hostPlayerState, screenWidthPx, screenHeightPx)
+            updatePlayerState(hostPlayerState)
         }
 
         // Update Client's player state (on host, apply client's received input)
         if (_uiState.value.multiplayerState.isMultiplayer && clientPlayerState.isAlive) {
             updatePlayerState(
-                clientPlayerState, screenWidthPx, screenHeightPx
+                clientPlayerState
             ) // Client's input already applied by handler
         }
 
@@ -369,21 +369,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 localPlayer = if (isHost()) hostPlayerState.toUiState(
-                    true, it.multiplayerState.isMultiplayer
-                ) else clientPlayerState.toUiState(false, it.multiplayerState.isMultiplayer),
+                    true,
+                ) else clientPlayerState.toUiState(false),
                 opponentPlayer = if (isHost()) clientPlayerState.toUiState(
-                    false, it.multiplayerState.isMultiplayer
-                ) else hostPlayerState.toUiState(true, it.multiplayerState.isMultiplayer)
+                    false,
+                ) else hostPlayerState.toUiState(true)
             )
         }
     }
 
     // isLocal is true for the player whose input is controlled by this device (on host, it's hostPlayerState; on client, it's clientPlayerState for sending input)
-    private fun updatePlayerState(player: PlayerState, width: Float, height: Float) {
+    private fun updatePlayerState(player: PlayerState) {
         // Update direction and position
         player.direction += player.turning * GameConstants.TURN_SPEED
         val speed =
-            if (player.boostState == BoostState.BOOSTING) GameConstants.BOOSTED_SPEED else GameConstants.NORMAL_SPEED
+            if (player.boostState == BoostState.BOOSTING) GameConstants.BOOSTED_SPEED else if (player.boostState == BoostState.BRAKING) GameConstants.BRAKING_SPEED else GameConstants.NORMAL_SPEED
         val nextPos = calculateNextPosition(player.trail.last().position, player.direction, speed)
 
         // Update gap logic
@@ -396,25 +396,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             player.gapCounter = 0
         }
 
-        // Update boost logic
-        when (player.boostState) {
-            BoostState.BOOSTING -> {
-                player.boostFrames++
-                if (player.boostFrames >= GameConstants.BOOST_DURATION_FRAMES) {
-                    player.boostState = BoostState.COOLDOWN
-                    player.boostFrames = 0
-                    player.boostCooldownFrames = GameConstants.BOOST_COOLDOWN_DURATION_FRAMES
-                }
+        if (player.boostState == BoostState.BOOSTING || player.boostState == BoostState.BRAKING) {
+            player.boostFrames++
+            if (player.boostFrames >= GameConstants.BOOST_DURATION_FRAMES) {
+                player.boostState = BoostState.COOLDOWN
+                player.boostFrames = 0
+                player.boostCooldownFrames = GameConstants.BOOST_COOLDOWN_DURATION_FRAMES
             }
-
-            BoostState.COOLDOWN -> {
-                player.boostCooldownFrames--
-                if (player.boostCooldownFrames <= 0) {
-                    player.boostState = BoostState.READY
-                }
-            }
-
-            BoostState.READY -> { /* Do nothing */
+        } else if (player.boostState == BoostState.COOLDOWN) {
+            player.boostCooldownFrames--
+            if (player.boostCooldownFrames <= 0) {
+                player.boostState = BoostState.READY
             }
         }
 
@@ -571,8 +563,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
             _uiState.update {
                 it.copy(
-                    localPlayer = clientPlayerState.toUiState(false, true), // Client's perspective
-                    opponentPlayer = hostPlayerState.toUiState(true, true), // Client's perspective
+                    localPlayer = clientPlayerState.toUiState(false), // Client's perspective
+                    opponentPlayer = hostPlayerState.toUiState(true), // Client's perspective
                     isGameOver = !hostPlayerState.isAlive || !clientPlayerState.isAlive
                 )
             }
@@ -586,9 +578,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val parts = data.split(":")
         when (parts[0]) {
             "turning" -> clientPlayerState.turning = parts[1].toFloat()
-            "boost_toggle" -> {
+            "boost" -> {
                 if (clientPlayerState.isAlive && clientPlayerState.boostState == BoostState.READY) {
-                    clientPlayerState.boostState = BoostState.BOOSTING
+                    clientPlayerState.boostState = BoostState.valueOf(parts[1])
                     clientPlayerState.boostFrames = 0
                 }
             }
@@ -638,11 +630,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 isGameOver = true,
                 gameOverMessage = message,
                 localPlayer = if (isHost()) hostPlayerState.toUiState(
-                    true, true
-                ) else clientPlayerState.toUiState(false, true),
+                    true,
+                ) else clientPlayerState.toUiState(false),
                 opponentPlayer = if (isHost()) clientPlayerState.toUiState(
-                    false, true
-                ) else hostPlayerState.toUiState(true, true)
+                    false,
+                ) else hostPlayerState.toUiState(true)
             )
         }
     }
@@ -667,13 +659,13 @@ private fun PlayerState.reset() {
     direction = 0f
 }
 
-private fun PlayerState.toUiState(isHost: Boolean, isMultiplayer: Boolean): PlayerUiState {
+private fun PlayerState.toUiState(isHost: Boolean): PlayerUiState {
     val color = when {
         !this.isAlive -> Color.Gray
         this.boostState == BoostState.BOOSTING -> Color.Magenta
-        !isMultiplayer -> Color.Red // Single player is always red
-        isHost -> Color.Red
-        else -> Color.Green
+        this.boostState == BoostState.BRAKING -> Color.Magenta
+        isHost -> Color.Blue
+        else -> Color.Red
     }
     return PlayerUiState(
         trail = this.trail.toList(),

@@ -121,9 +121,9 @@ fun CurveGameScreen(
                     if (!uiState.isRunning || !localPlayer.isAlive || localPlayer.boostState != BoostState.READY) return@detectVerticalDragGestures
 
                     if (totalDragAmount < -GameConstants.SWIPE_THRESHOLD) {
-                        gameViewModel.toggleBoost()
+                        gameViewModel.toggleBoost(BoostState.BOOSTING)
                     } else if (totalDragAmount > GameConstants.SWIPE_THRESHOLD) {
-                        // TODO: activate slow mode (if implemented, send to host)
+                        gameViewModel.toggleBoost(BoostState.BRAKING)
                     }
                     totalDragAmount = 0f
                 }, onDragCancel = {
@@ -240,6 +240,7 @@ fun BoostStatus(boostState: BoostState, cooldownFrames: Int) {
         val (text, color) = when (boostState) {
             BoostState.READY -> "Boost Ready! (Swipe Up)" to Color.Green
             BoostState.BOOSTING -> "Boosting..." to Color.Magenta
+            BoostState.BRAKING -> "Braking..." to Color.Magenta
             BoostState.COOLDOWN -> "Boost ready in ${cooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).toInt()}s" to Color.Black
         }
         Text(
