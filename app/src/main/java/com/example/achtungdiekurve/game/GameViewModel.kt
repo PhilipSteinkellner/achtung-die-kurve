@@ -19,14 +19,20 @@ import com.example.achtungdiekurve.multiplayer.NearbyConnectionsManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.random.Random
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
+
+    //TODO a menu to let the client player quit- and boot them to the main menu when host leaves.
 
     private val _uiState = MutableStateFlow(GameUiState())
     val uiState: StateFlow<GameUiState> = _uiState.asStateFlow()
@@ -189,27 +195,122 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         if (isMultiplayer()) {
             if (isHost()) {
-                // Host sends status to client
+                if (newIsRunning) {
+                    startGameLoop(
+                        _uiState.value.screenWidthPx,
+                        _uiState.value.screenHeightPx
+                    )
+                } else {
+                    stopGameLoop()
+                }
+
                 nearbyConnectionsManager.sendGameData("game_running_status:$newIsRunning")
             } else {
-                // Client requests host to toggle status
                 nearbyConnectionsManager.sendGameData("request_game_running_status:$newIsRunning")
             }
         } else {
-            if (!newIsRunning) stopGameLoop()
+            if (newIsRunning) {
+                startGameLoop(
+                    _uiState.value.screenWidthPx,
+                    _uiState.value.screenHeightPx
+                )
+            } else {
+                stopGameLoop()
+            }
         }
     }
 
     fun resetGameRound() {
         if (isHost()) {
-            resetGame()
-            nearbyConnectionsManager.sendGameData("resetGame:")
+            stopGameLoop()
+
+            // If match is over, start a new match
+            if (_uiState.value.isMatchOver) {
+                // Full reset including scores
+                hostPlayerState.reset()
+                clientPlayerState.reset()
+                _uiState.update {
+                    it.copy(
+                        localPlayer = PlayerUiState(),
+                        opponentPlayer = PlayerUiState(),
+                        isRunning = true, // Auto-start the game
+                        isGameOver = false,
+                        gameOverMessage = "",
+                        isMatchOver = false
+                    )
+                }
+                // Tell client to do a full reset
+                nearbyConnectionsManager.sendGameData("reset_match:")
+            } else {
+                // Just reset for new round, keep scores
+                hostPlayerState.resetForNewRound()
+                clientPlayerState.resetForNewRound()
+                _uiState.update {
+                    it.copy(
+                        // Keep the scores in UI
+                        localPlayer = PlayerUiState(score = hostPlayerState.score),
+                        opponentPlayer = PlayerUiState(score = clientPlayerState.score),
+                        isRunning = true, // Auto-start the game
+                        isGameOver = false,
+                        gameOverMessage = ""
+                    )
+                }
+                // Tell client to reset for new round only
+                nearbyConnectionsManager.sendGameData("reset_round:")
+            }
+
+            // Send the running status to client
+            nearbyConnectionsManager.sendGameData("game_running_status:true")
+
+            startGameLoop(
+                _uiState.value.screenWidthPx,
+                _uiState.value.screenHeightPx
+            )
         } else {
             // Client requests host to reset
             nearbyConnectionsManager.sendGameData("request_reset_game:")
         }
-
     }
+
+    fun startNewMatch() {
+        if (!isHost()) return
+
+        // Reset scores and start fresh
+        hostPlayerState.reset()
+        clientPlayerState.reset()
+
+        _uiState.update {
+            it.copy(
+                localPlayer = PlayerUiState(),
+                opponentPlayer = PlayerUiState(),
+                isMatchOver = false,
+                isGameOver = false,
+                gameOverMessage = "",
+                isRunning = true
+            )
+        }
+
+        // Tell client to reset everything
+        nearbyConnectionsManager.sendGameData("reset_match:")
+        nearbyConnectionsManager.sendGameData("game_running_status:true")
+
+        initializeGamePositions(
+            _uiState.value.screenWidthPx,
+            _uiState.value.screenHeightPx
+        )
+        startGameLoop(
+            _uiState.value.screenWidthPx,
+            _uiState.value.screenHeightPx
+        )
+    }
+
+    fun setScoreToWin(score: Int) {
+        if (!isHost()) return // Only host can set this
+        _uiState.update { it.copy(scoreToWin = score) }
+        // Inform the client of the new setting
+        nearbyConnectionsManager.sendGameData("set_score_to_win:$score")
+    }
+
 
     fun startHostingGame() {
         if (!isMultiplayer()) return
@@ -232,32 +333,41 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 opponentPlayer = PlayerUiState(),
                 isRunning = false,
                 isGameOver = false,
-                gameOverMessage = ""
+                gameOverMessage = "",
+                isMatchOver = false
             )
         }
     }
 
     fun initializeGamePositions(screenWidthPx: Float, screenHeightPx: Float) {
-
         if (!isHost()) return
 
         // Update screen dimensions in UI state
         _uiState.update {
             it.copy(
-                screenWidthPx = screenWidthPx, screenHeightPx = screenHeightPx
+                screenWidthPx = screenWidthPx,
+                screenHeightPx = screenHeightPx
             )
         }
 
+        // Force initialization if game is over or match is over
         // Only initialize if trails are empty to prevent re-initialization on config changes
-        if (hostPlayerState.trail.isNotEmpty() || clientPlayerState.trail.isNotEmpty()) return
+        val shouldInitialize = hostPlayerState.trail.isEmpty() ||
+                clientPlayerState.trail.isEmpty() ||
+                _uiState.value.isGameOver ||
+                _uiState.value.isMatchOver
+
+        if (!shouldInitialize) return
 
         fun randomOffset(): Offset {
-            val x =
-                Random.nextFloat() * (screenWidthPx - 2 * GameConstants.SPAWN_MARGIN) + GameConstants.SPAWN_MARGIN
-            val y =
-                Random.nextFloat() * (screenHeightPx - 2 * GameConstants.SPAWN_MARGIN) + GameConstants.SPAWN_MARGIN
+            val x = Random.nextFloat() * (screenWidthPx - 2 * GameConstants.SPAWN_MARGIN) + GameConstants.SPAWN_MARGIN
+            val y = Random.nextFloat() * (screenHeightPx - 2 * GameConstants.SPAWN_MARGIN) + GameConstants.SPAWN_MARGIN
             return Offset(x, y)
         }
+
+        // Clear trails before adding new positions
+        hostPlayerState.trail.clear()
+        clientPlayerState.trail.clear()
 
         // host defines initial state for both
         val hostStartPos = randomOffset()
@@ -275,15 +385,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Update UI based on who 'local' and 'opponent' are for this device
         _uiState.update {
             it.copy(
-                localPlayer = hostPlayerState.toUiState(
-                    true,
-                ), opponentPlayer = clientPlayerState.toUiState(
-                    false,
-                )
+                localPlayer = hostPlayerState.toUiState(true),
+                opponentPlayer = clientPlayerState.toUiState(false)
             )
         }
-
     }
+
 
     fun startGameLoop(screenWidthPx: Float, screenHeightPx: Float) {
         if (gameLoopJob?.isActive == true) return
@@ -314,7 +421,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!hostPlayerState.isAlive && !clientPlayerState.isAlive) {
             // Both crashed, game is over.
             stopGameLoop()
-            handleGameOver(crashedByLocal = true, crashedByOpponent = true) // Indicate both crashed
+            handleRoundEnd(crashedByLocal = true, crashedByOpponent = true)
             return
         }
 
@@ -368,12 +475,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Update UI based on roles
         _uiState.update {
             it.copy(
-                localPlayer = if (isHost()) hostPlayerState.toUiState(
-                    true,
-                ) else clientPlayerState.toUiState(false),
-                opponentPlayer = if (isHost()) clientPlayerState.toUiState(
-                    false,
-                ) else hostPlayerState.toUiState(true)
+                localPlayer = if (isHost()) hostPlayerState.toUiState(true) else clientPlayerState.toUiState(false),
+                opponentPlayer = if (isHost()) clientPlayerState.toUiState(false) else hostPlayerState.toUiState(true)
             )
         }
     }
@@ -455,21 +558,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // Host calls this when a crash occurs
     private fun handleCrash(crashedHost: Boolean, crashedClient: Boolean) {
+        stopGameLoop()
         if (crashedHost) hostPlayerState.isAlive = false
         if (crashedClient) clientPlayerState.isAlive = false
 
-        if (_uiState.value.multiplayerState.isMultiplayer) {
-            // Host informs client about crash status
-            nearbyConnectionsManager.sendGameData("game_over_status:$crashedHost,$crashedClient")
-        }
-
-        // Determine actual game over state
-        val isGameOverNow = !hostPlayerState.isAlive || !clientPlayerState.isAlive
-
-        if (isGameOverNow) {
-            stopGameLoop()
-            handleGameOver(crashedByLocal = crashedHost, crashedByOpponent = crashedClient)
-        }
+        // On the host, "local" player is the host, "opponent" is the client.
+        handleRoundEnd(crashedByLocal = crashedHost, crashedByOpponent = crashedClient)
     }
 
 
@@ -496,29 +590,66 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     stopGameLoop()
                 }
-                nearbyConnectionsManager.sendGameData("game_running_status:$requestedStatus") // Host broadcasts confirmation
+                nearbyConnectionsManager.sendGameData("game_running_status:$requestedStatus")
             }
             // Client receives game running status from host
             "game_running_status" -> if (!isHost() && data != null) handleGameRunningStatus(data.toBoolean())
             // Host receives request to reset game
             "request_reset_game" -> if (isHost()) {
-                resetGame()
-                nearbyConnectionsManager.sendGameData("resetGame:") // Host broadcasts confirmation
+                resetGameRound()
             }
-            // Client receives reset game command from host
-            "resetGame" -> if (!isHost()) resetGame()
-            // Client receives game over status from host
-            "game_over_status" -> if (!isHost() && data != null) handleRemoteGameOverStatus(data)
+            "reset_round" -> if (!isHost()) {
+                // Client resets for new round only
+                resetGameForNewRound()
+            }
+            "reset_match" -> if (!isHost()) {
+                // Client does full reset for new match
+                resetGame()
+            }
+            "round_over" -> if (!isHost() && data != null) handleRemoteRoundOver(data)
+            "match_over" -> if (!isHost() && data != null) handleRemoteMatchOver(data)
+            "set_score_to_win" -> if (!isHost() && data != null) {
+                _uiState.update { it.copy(scoreToWin = data.toInt()) }
+            }
         }
     }
 
-    // Host to client: full game state sync
+
+
+    // Client-side function to reset for a new round without touching scores
+    private fun resetGameForNewRound() {
+        stopGameLoop()
+
+        // Keep the scores when resetting for new round
+        val localScore = clientPlayerState.score
+        val opponentScore = hostPlayerState.score
+
+        hostPlayerState.resetForNewRound()
+        clientPlayerState.resetForNewRound()
+
+        // Restore scores
+        clientPlayerState.score = localScore
+        hostPlayerState.score = opponentScore
+
+        _uiState.update {
+            it.copy(
+                localPlayer = PlayerUiState(score = localScore),
+                opponentPlayer = PlayerUiState(score = opponentScore),
+                isRunning = true, // Auto-start the game
+                isGameOver = false,
+                gameOverMessage = ""
+            )
+        }
+        initializeGamePositions(_uiState.value.screenWidthPx, _uiState.value.screenHeightPx)
+    }
+
+    // Host to client: full game state sync - added score
     private fun serializeGameState(hostState: PlayerState, clientState: PlayerState): String {
         val hostData =
-            "${hostState.trail.lastOrNull()?.position?.x ?: 0f}," + "${hostState.trail.lastOrNull()?.position?.y ?: 0f}," + "${hostState.direction},${hostState.isDrawing},${hostState.isAlive},${hostState.boostState.ordinal}," + "${hostState.boostCooldownFrames}"
+            "${hostState.trail.lastOrNull()?.position?.x ?: 0f}," + "${hostState.trail.lastOrNull()?.position?.y ?: 0f}," + "${hostState.direction},${hostState.isDrawing},${hostState.isAlive},${hostState.boostState.ordinal}," + "${hostState.boostCooldownFrames}," + "${hostState.score}"
 
         val clientData =
-            "${clientState.trail.lastOrNull()?.position?.x ?: 0f}," + "${clientState.trail.lastOrNull()?.position?.y ?: 0f}," + "${clientState.direction},${clientState.isDrawing},${clientState.isAlive},${clientState.boostState.ordinal}," + "${clientState.boostCooldownFrames}"
+            "${clientState.trail.lastOrNull()?.position?.x ?: 0f}," + "${clientState.trail.lastOrNull()?.position?.y ?: 0f}," + "${clientState.direction},${clientState.isDrawing},${clientState.isAlive},${clientState.boostState.ordinal}," + "${clientState.boostCooldownFrames}," + "${clientState.score}"
         return "$hostData;$clientData"
     }
 
@@ -540,11 +671,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             hostPlayerState.direction = hostData[2].toFloat()
-            hostPlayerState.isDrawing = hostData[3].toBoolean()
+            clientPlayerState.isDrawing = clientData[3].toBoolean()
             hostPlayerState.isAlive = hostData[4].toBoolean()
             hostPlayerState.boostState = BoostState.entries.toTypedArray()[hostData[5].toInt()]
             hostPlayerState.boostCooldownFrames = hostData[6].toInt()
-
+            hostPlayerState.score = hostData[7].toInt()
 
             // Update clientPlayerState (which is local from client's perspective)
             val newClientPos = Offset(clientData[0].toFloat(), clientData[1].toFloat())
@@ -560,6 +691,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             clientPlayerState.isAlive = clientData[4].toBoolean()
             clientPlayerState.boostState = BoostState.entries.toTypedArray()[clientData[5].toInt()]
             clientPlayerState.boostCooldownFrames = clientData[6].toInt()
+            clientPlayerState.score = clientData[7].toInt()
 
             _uiState.update {
                 it.copy(
@@ -589,55 +721,190 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun handleGameRunningStatus(receivedIsRunning: Boolean) {
         _uiState.update { it.copy(isRunning = receivedIsRunning) }
-        if (!receivedIsRunning) {
-            stopGameLoop() // Client stops its local "loop" (which isn't running game logic, but could be for responsiveness)
+    }
+
+    // Client receives round over status from host
+    private fun handleRemoteRoundOver(data: String) {
+        val parts = data.split(":", limit = 3)
+        hostPlayerState.score = parts[0].toInt()
+        clientPlayerState.score = parts[1].toInt()
+        val message = parts[2]
+
+        handleRoundEnd(crashedByLocal = !clientPlayerState.isAlive, crashedByOpponent = !hostPlayerState.isAlive)
+    }
+
+    // Client receives match over status from host
+    private fun handleRemoteMatchOver(data: String) {
+        val parts = data.split(":", limit = 3)
+        hostPlayerState.score = parts[0].toInt()
+        clientPlayerState.score = parts[1].toInt()
+        val message = parts[2]
+
+        _uiState.update {
+            it.copy(
+                isGameOver = true,
+                isMatchOver = true,
+                gameOverMessage = message,
+                localPlayer = clientPlayerState.toUiState(false),
+                opponentPlayer = hostPlayerState.toUiState(true)
+            )
         }
     }
 
-    // Client receives game over status from host
-    private fun handleRemoteGameOverStatus(data: String) {
-        val parts = data.split(",")
-        val crashedHost = parts[0].toBoolean()
-        val crashedClient = parts[1].toBoolean()
-
-        hostPlayerState.isAlive = !crashedHost // Update host player's alive status
-        clientPlayerState.isAlive = !crashedClient // Update client player's alive status
-
-        stopGameLoop() // Ensure client's local loop (if any) stops
-        handleGameOver(crashedByLocal = crashedClient, crashedByOpponent = crashedHost)
-    }
-
-    // Consolidated game over logic
-    private fun handleGameOver(crashedByLocal: Boolean, crashedByOpponent: Boolean) {
+    private fun handleRoundEnd(crashedByLocal: Boolean, crashedByOpponent: Boolean) {
         stopGameLoop()
-        val isSinglePlayer = !_uiState.value.multiplayerState.isMultiplayer
 
+        if (isHost()) {
+            if (!crashedByLocal && crashedByOpponent) {
+                hostPlayerState.score++
+            } else if (crashedByLocal && !crashedByOpponent && isMultiplayer()) {
+                clientPlayerState.score++
+            }
+            // If both crash or in single player you crash, no points awarded.
+
+            val scoreToWin = _uiState.value.scoreToWin
+            if (isMultiplayer() && (hostPlayerState.score >= scoreToWin || clientPlayerState.score >= scoreToWin)) {
+                handleMatchOver()
+                return
+            }
+        }
+
+        val isSinglePlayer = !_uiState.value.multiplayerState.isMultiplayer
         val message = when {
-            isSinglePlayer -> "Game Over! You crashed!"
-            crashedByLocal && crashedByOpponent -> "Draw! Both players crashed!"
-            // In multiplayer, 'local' refers to the player controlled by THIS device.
-            // On host: crashedByLocal is hostPlayerState, crashedByOpponent is clientPlayerState
-            // On client: crashedByLocal is clientPlayerState, crashedByOpponent is hostPlayerState
-            isHost() && crashedByLocal -> "You Lose! You crashed!"
-            isHost() && crashedByOpponent -> "You Win! Opponent crashed!"
-            !isHost() && crashedByLocal -> "You Lose! You crashed!"
-            !isHost() && crashedByOpponent -> "You Win! Opponent crashed!"
-            else -> "Game Over!" // Fallback
+            isSinglePlayer -> "You crashed! Tap New Game to try again."
+            crashedByLocal && crashedByOpponent -> "Draw! Both crashed!"
+            crashedByLocal -> "You Lose! Opponent gets a point."
+            crashedByOpponent -> "You Win! You get a point."
+            else -> "Round Over!"
+        }
+
+        if (isHost() && isMultiplayer()) {
+            nearbyConnectionsManager.sendGameData("round_over:${hostPlayerState.score}:${clientPlayerState.score}:$message")
         }
 
         _uiState.update {
             it.copy(
                 isGameOver = true,
                 gameOverMessage = message,
-                localPlayer = if (isHost()) hostPlayerState.toUiState(
-                    true,
-                ) else clientPlayerState.toUiState(false),
-                opponentPlayer = if (isHost()) clientPlayerState.toUiState(
-                    false,
-                ) else hostPlayerState.toUiState(true)
+                localPlayer = if (isHost()) hostPlayerState.toUiState(true) else clientPlayerState.toUiState(false),
+                opponentPlayer = if (isHost()) clientPlayerState.toUiState(false) else hostPlayerState.toUiState(true)
             )
         }
     }
+
+    private fun handleMatchOver() {
+        // This is only ever called on the host.
+        val hostWins = hostPlayerState.score > clientPlayerState.score
+
+        val finalMessageForHost = if (hostWins) "You Win the Match!" else "You Lose the Match!"
+        val finalMessageForClient = if (hostWins) "You Lose the Match!" else "You Win the Match!"
+
+        // Update host UI immediately
+        _uiState.update {
+            it.copy(
+                isGameOver = true,
+                isMatchOver = true,
+                gameOverMessage = finalMessageForHost,
+                localPlayer = hostPlayerState.toUiState(true),
+                opponentPlayer = clientPlayerState.toUiState(false)
+            )
+        }
+
+        // Inform the client about the final game over with their specific message
+        nearbyConnectionsManager.sendGameData("match_over:${hostPlayerState.score}:${clientPlayerState.score}:$finalMessageForClient")
+    }
+
+
+
+
+    fun hideScoreSetup() {
+        _uiState.update { it.copy(showScoreSetup = false) }
+    }
+
+    fun hideGameOver() {
+        _uiState.update { it.copy(showGameOver = false) }
+    }
+
+    fun onScoreSetupStartGame() {
+        if (_uiState.value.isMatchOver) {
+            startNewMatch()
+        } else {
+            initializeGamePositions(_uiState.value.screenWidthPx, _uiState.value.screenHeightPx)
+            toggleGameRunning()
+        }
+        hideScoreSetup()
+    }
+
+    fun onGameOverNewGame() {
+        if (_uiState.value.isMatchOver) {
+            _uiState.update {
+                it.copy(
+                    isGameOver = false,
+                    gameOverMessage = ""
+                )
+            }
+        } else {
+            // For regular round over, proceed as normal
+            resetGameRound()
+            initializeGamePositions(_uiState.value.screenWidthPx, _uiState.value.screenHeightPx)
+            hideGameOver()
+        }
+    }
+
+    fun incrementScoreToWin() {
+        setScoreToWin(_uiState.value.scoreToWin + 1)
+    }
+
+    fun decrementScoreToWin() {
+        setScoreToWin((_uiState.value.scoreToWin - 1).coerceAtLeast(1))
+    }
+
+    val shouldShowScoreSetup: StateFlow<Boolean> = uiState
+        .map { state ->
+            val showBefore = state.multiplayerState.isHost &&
+                    !state.isRunning &&
+                    !state.isGameOver &&
+                    state.localPlayer.score == 0 &&
+                    state.opponentPlayer.score == 0
+
+            val showAfter = state.multiplayerState.isHost &&
+                    state.isMatchOver &&
+                    !state.isRunning &&
+                    !state.isGameOver
+
+            showBefore || showAfter
+        }
+        .onEach { shouldShow: Boolean ->
+            if (shouldShow) updateScoreSetupText()
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+
+    val shouldShowGameOver: StateFlow<Boolean> = uiState
+        .map { state ->
+            state.isGameOver &&
+                    (state.multiplayerState.isHost || !state.multiplayerState.isMultiplayer)
+        }
+        .onEach { shouldShow: Boolean ->
+            if (shouldShow) updateGameOverTitle()
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private fun updateGameOverTitle() {
+        val title = if (_uiState.value.isMatchOver) "Match Over!" else "Round Over!"
+        _uiState.update {
+            it.copy(gameOverTitle = title)
+        }
+    }
+
+    private fun updateScoreSetupText() {
+        val title = if (_uiState.value.isMatchOver) "Match Complete! New Game Setup" else "Game Setup"
+        val message = "First to win:"
+        _uiState.update {
+            it.copy(scoreSetupTitle = title, scoreSetupMessage = message)
+        }
+    }
+
 
     override fun onCleared() {
         super.onCleared()
@@ -646,8 +913,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+
+
+
+
 // --- Helper Extensions ---
 private fun PlayerState.reset() {
+    resetForNewRound()
+    score = 0
+}
+
+private fun PlayerState.resetForNewRound() {
     trail.clear()
     turning = 0f
     isDrawing = true
@@ -672,6 +948,7 @@ private fun PlayerState.toUiState(isHost: Boolean): PlayerUiState {
         isAlive = this.isAlive,
         boostState = this.boostState,
         boostCooldownFrames = this.boostCooldownFrames,
-        color = color
+        color = color,
+        score = this.score
     )
 }

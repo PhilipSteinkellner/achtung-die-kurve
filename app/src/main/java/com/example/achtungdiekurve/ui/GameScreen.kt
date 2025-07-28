@@ -2,15 +2,25 @@ package com.example.achtungdiekurve.ui
 
 import android.util.Log
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -18,11 +28,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,6 +61,9 @@ fun CurveGameScreen(
     val screenWidthPx = uiState.screenWidthPx
     val screenHeightPx = uiState.screenHeightPx
 
+    val showScoreSetup by gameViewModel.shouldShowScoreSetup.collectAsState()
+    val showGameOver by gameViewModel.shouldShowGameOver.collectAsState()
+
     val density = LocalDensity.current
     val localWindow = LocalWindowInfo.current
 
@@ -63,31 +78,28 @@ fun CurveGameScreen(
         }
     }
 
-    LaunchedEffect(
-        uiState.isRunning,
-        uiState.isGameOver,
-        multiplayerState.isHost,
-        multiplayerState.isMultiplayer,
-        screenWidthPx,
-        screenHeightPx
-    ) {
-        val shouldStartGameLoop =
-            uiState.isRunning && !uiState.isGameOver && ((multiplayerState.isMultiplayer && multiplayerState.isHost) || !multiplayerState.isMultiplayer)
-
-        if (shouldStartGameLoop) {
-            if (screenWidthPx > 0 && screenHeightPx > 0) {
-                gameViewModel.startGameLoop(screenWidthPx, screenHeightPx)
-            } else {
-                Log.w("GameScreen", "Screen dimensions not yet available for game loop.")
-            }
-        }
-    }
 
     if (controlMode == ControlMode.TILT) {
         rememberAccelerometerSensorHandler { tiltValue ->
             gameViewModel.setLocalTurning(tiltValue)
         }
     }
+
+    // Check if we should show the score setup screen before match
+    //  val showScoreSetup = multiplayerState.isHost &&
+            //        !uiState.isRunning &&
+            //        !uiState.isGameOver &&
+            //        uiState.localPlayer.score == 0 &&
+            //        uiState.opponentPlayer.score == 0
+
+    // Check if we should show the score setup screen after match
+    //  val showScoreSetupAfterMatch = multiplayerState.isHost &&
+    //        uiState.isMatchOver &&
+    //        !uiState.isRunning
+
+    // Check if one or the other condition is true.
+    //  val shouldShowScoreSetup = showScoreSetup || showScoreSetupAfterMatch
+
 
     Box(
         modifier = Modifier
@@ -141,14 +153,81 @@ fun CurveGameScreen(
             modifier = modifier,
             uiState = uiState,
             onPauseResumeClick = { gameViewModel.toggleGameRunning() },
-            onResetClick = {
-                gameViewModel.resetGameRound()
-                gameViewModel.initializeGamePositions(screenWidthPx, screenHeightPx)
-            },
-            onReturnToMenu = onReturnToMenu
-        )
+            showScoreSetup = showScoreSetup        )
+
+        // Score Setup Overlay
+        if (showScoreSetup) {
+            GameOverlay(
+                title = uiState.scoreSetupTitle,
+                message = uiState.scoreSetupMessage
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Button(onClick = { gameViewModel.decrementScoreToWin() }) {
+                        Text("-", fontSize = 20.sp)
+                    }
+
+                    Text(
+                        text = "${uiState.scoreToWin}",
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
+
+                    Button(onClick = { gameViewModel.incrementScoreToWin() }) {
+                        Text("+", fontSize = 20.sp)
+                    }
+                }
+
+                Text(
+                    text = if (uiState.scoreToWin == 1) "round" else "rounds",
+                    fontSize = 16.sp,
+                    color = Color.Gray
+                )
+
+                Button(
+                    onClick = { gameViewModel.onScoreSetupStartGame() },
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text(
+                        text = if (uiState.isMatchOver) "Start New Match" else "Start Game",
+                        fontSize = 18.sp
+                    )
+                }
+            }
+        }
+
+        // Game Over Overlay
+        if (showGameOver) {
+            GameOverlay(
+                title = uiState.gameOverTitle,
+                message = uiState.gameOverMessage
+            ) {
+                Button(onClick = { gameViewModel.onGameOverNewGame() }) {
+                    Text(
+                        text = if (uiState.isMatchOver) "New Game" else "Next Round",
+                        fontSize = 18.sp
+                    )
+                }
+
+                Button(
+                    onClick = onReturnToMenu,
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text("Back to Menu", fontSize = 18.sp)
+                }
+            }
+        }
     }
 }
+
+
+
+
+
+
 
 private fun DrawScope.drawPlayerTrail(playerState: PlayerUiState) {
     for (i in 1 until playerState.trail.size) {
@@ -166,88 +245,218 @@ private fun DrawScope.drawPlayerTrail(playerState: PlayerUiState) {
 }
 
 @Composable
-fun GameHud(
-    modifier: Modifier,
-    uiState: GameUiState,
-    onPauseResumeClick: () -> Unit,
-    onResetClick: () -> Unit,
-    onReturnToMenu: () -> Unit
+fun GameOverlay(
+    title: String,
+    message: String,
+    content: @Composable () -> Unit
 ) {
-    val multiplayerState = uiState.multiplayerState
-
-    Column(
-        modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.Center
     ) {
-        if (uiState.isGameOver && (uiState.multiplayerState.isHost || !uiState.multiplayerState.isMultiplayer)) {
-            Button(onClick = onResetClick) {
-                Text("Reset")
-            }
-        }
-
-        if (!uiState.isGameOver) {
-            Button(onClick = onPauseResumeClick) {
-                Text(if (uiState.isRunning) "Pause" else "Resume")
-            }
-        }
-
-
-        if (!uiState.isRunning || uiState.isGameOver) {
-            Button(onClick = onReturnToMenu, modifier = Modifier.padding(top = 8.dp)) {
-                Text("Menu")
-            }
-        }
-    }
-
-    Text(
-        text = if (!multiplayerState.isMultiplayer) "Mode: Single Player"
-        else "Role: ${if (multiplayerState.isHost) "Host (Red)" else "Client (Green)"} | ${multiplayerState.connectionStatus}",
-        fontSize = 12.sp,
-        color = Color.Black,
-        modifier = Modifier.padding(8.dp)
-    )
-
-    if (uiState.isGameOver) {
-        Box(
-            modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center
+        Card(
+            modifier = Modifier.padding(32.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
-            Text(
-                text = uiState.gameOverMessage,
-                color = Color.Black,
-                fontSize = 24.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(16.dp)
-            )
-        }
-    }
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = title,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black,
+                    textAlign = TextAlign.Center
+                )
 
-    if (uiState.localPlayer.isAlive) {
-        BoostStatus(
-            boostState = uiState.localPlayer.boostState,
-            cooldownFrames = uiState.localPlayer.boostCooldownFrames
-        )
+                Text(
+                    text = message,
+                    fontSize = 18.sp,
+                    color = Color.DarkGray,
+                    textAlign = TextAlign.Center
+                )
+
+                content()
+            }
+        }
     }
 }
 
 @Composable
-fun BoostStatus(boostState: BoostState, cooldownFrames: Int) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Bottom
-    ) {
-        val (text, color) = when (boostState) {
-            BoostState.READY -> "Boost Ready! (Swipe Up/Down)" to Color.Green
-            BoostState.BOOSTING -> "Boosting..." to Color.Magenta
-            BoostState.BRAKING -> "Braking..." to Color.Magenta
-            BoostState.COOLDOWN -> "Boost ready in ${cooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).toInt()}s" to Color.Black
+fun GameHud(
+    modifier: Modifier,
+    uiState: GameUiState,
+    onPauseResumeClick: () -> Unit,
+    showScoreSetup: Boolean
+) {
+    val multiplayerState = uiState.multiplayerState
+
+    // Only show control buttons if overlays are not active
+    if (!showScoreSetup && !uiState.isGameOver) {
+        Column(
+            modifier = modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Button(onClick = onPauseResumeClick) {
+                Text(if (uiState.isRunning) "Pause" else "Resume")
+            }
         }
+    }
+
+    // Connection status at the top-left
+    if (!showScoreSetup) {
         Text(
-            text = text,
-            color = color,
-            fontSize = 16.sp,
-            modifier = Modifier.padding(bottom = 16.dp)
+            text = if (!multiplayerState.isMultiplayer) "Mode: Single Player"
+            else "Role: ${if (multiplayerState.isHost) "Host" else "Client"} | ${multiplayerState.connectionStatus}",
+            fontSize = 12.sp,
+            color = Color.Black,
+            modifier = Modifier.padding(8.dp)
         )
     }
+
+    // Bottom-aligned Score Display with Boost Status
+    if (!showScoreSetup) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Bottom
+        ) {
+            // Score Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .shadow(8.dp, RoundedCornerShape(16.dp))
+                    .border(2.dp, Color.Black.copy(alpha = 0.1f), RoundedCornerShape(16.dp)),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Local Player Score
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(uiState.localPlayer.color, CircleShape)
+                                    .border(2.dp, Color.Black.copy(alpha = 0.2f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "${uiState.localPlayer.score}",
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                            Text(
+                                text = "You",
+                                fontSize = 12.sp,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+
+                        // VS Text
+                        Text(
+                            text = "VS",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.DarkGray,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+
+                        // Opponent Score
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(uiState.opponentPlayer.color, CircleShape)
+                                    .border(2.dp, Color.Black.copy(alpha = 0.2f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "${uiState.opponentPlayer.score}",
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                            Text(
+                                text = if (multiplayerState.isMultiplayer) "Opponent" else "AI",
+                                fontSize = 12.sp,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // First to X wins text
+                    Box(
+                        modifier = Modifier
+                            .background(Color.Gray.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "First to ${uiState.scoreToWin} wins!",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.DarkGray
+                        )
+                    }
+                }
+            }
+
+            // Boost Status (only show if player is alive)
+            if (uiState.localPlayer.isAlive) {
+                val (text, color) = when (uiState.localPlayer.boostState) {
+                    BoostState.READY -> "Boost Ready! (Swipe Up/Down)" to Color.Green
+                    BoostState.BOOSTING -> "Boosting..." to Color.Magenta
+                    BoostState.BRAKING -> "Braking..." to Color.Magenta
+                    BoostState.COOLDOWN -> "Boost ready in ${uiState.localPlayer.boostCooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).toInt()}s" to Color.Black
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.8f)),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Text(
+                        text = text,
+                        color = color,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+    }
 }
+

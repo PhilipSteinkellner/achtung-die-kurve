@@ -15,5 +15,5 @@ object GameConstants {
     const val TILT_THRESHOLD = 2
     const val SWIPE_THRESHOLD = 200f
     const val MIN_SEGMENTS_FOR_SELF_COLLISION = 5
-    const val SPAWN_MARGIN = 200f
+    const val SPAWN_MARGIN = 400f
 }

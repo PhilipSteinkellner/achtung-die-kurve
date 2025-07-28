@@ -23,7 +23,8 @@ data class PlayerUiState(
     val isAlive: Boolean = true,
     val boostState: BoostState = BoostState.READY,
     val boostCooldownFrames: Int = 0,
-    val color: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Gray
+    val color: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Gray ,
+    val score : Int = 0
 )
 
 // Data class for multiplayer-specific UI state
@@ -44,7 +45,15 @@ data class GameUiState(
     val gameOverMessage: String = "",
     val showModeSelection: Boolean = true,
     val screenWidthPx: Float = 0f, // New field
-    val screenHeightPx: Float = 0f // New field
+    val screenHeightPx: Float = 0f, // New field
+    val scoreToWin: Int = 5, // Default
+    val isMatchOver: Boolean = false,
+    val showScoreSetup: Boolean = false,
+    val showGameOver: Boolean = false,
+    val scoreSetupTitle: String = "",
+    val scoreSetupMessage: String = "",
+    val gameOverTitle: String = ""
+
 
 )
 
@@ -58,7 +67,8 @@ data class PlayerState(
     var boostState: BoostState = BoostState.READY,
     var boostFrames: Int = 0,
     var boostCooldownFrames: Int = 0,
-    var isAlive: Boolean = true
+    var isAlive: Boolean = true,
+    var score : Int = 0
 )
 
 // Helper function to calculate the next position of a player
