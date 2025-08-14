@@ -13,20 +13,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.achtungdiekurve.data.ControlMode
+import com.example.achtungdiekurve.data.SettingsRepository
 import com.example.achtungdiekurve.game.GameViewModel
+import com.example.achtungdiekurve.settings.SettingsViewModel
+import com.example.achtungdiekurve.settings.SettingsViewModelFactory
 import com.example.achtungdiekurve.ui.CurveGameScreen
 import com.example.achtungdiekurve.ui.MenuScreen
+import com.example.achtungdiekurve.ui.MultiplayerSetupScreen
 import com.example.achtungdiekurve.ui.SettingsScreen
 import com.example.achtungdiekurve.ui.theme.AchtungDieKurveTheme
 
@@ -80,45 +81,35 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun CurveApp(modifier: Modifier) {
     val navController = rememberNavController()
-    var controlMode by rememberSaveable { mutableStateOf(ControlMode.TAP) }
-    val gameViewModel: GameViewModel = viewModel() // Obtain ViewModel at a higher scope
+    val gameViewModel: GameViewModel = viewModel()
+    val context = LocalContext.current
+    val repo = remember { SettingsRepository(context) }
+    val settingsViewModel: SettingsViewModel = viewModel(factory = SettingsViewModelFactory(repo))
+
 
     NavHost(navController, startDestination = "menu") {
         composable("menu") {
             MenuScreen(
-                onStartGame = { isSinglePlayer ->
-                    // The game mode is already set in the ViewModel by MenuScreen itself.
-                    // We just navigate to the game screen.
-                    navController.navigate("game")
-                },
-                onReturnToGame = {
-                    navController.navigate("game") {
-                        // Pop up to game to avoid multiple instances on back stack
-                        popUpTo("game") { inclusive = true }
-                        launchSingleTop = true
-                    }
-                },
-                onSettingsClick = { navController.navigate("settings") },
-                gameViewModel = gameViewModel // Pass the ViewModel
+                navController = navController, gameViewModel = gameViewModel
+            )
+        }
+        composable("multiplayer_setup") {
+            MultiplayerSetupScreen(
+                navController = navController,
+                gameViewModel = gameViewModel,
+                settingsViewModel = settingsViewModel,
             )
         }
         composable("game") {
             CurveGameScreen(
                 modifier = modifier,
-                onReturnToMenu = {
-                    // When returning to menu, ensure the GameViewModel is reset
-                    // to show mode selection again if navigating back to game.
-                    gameViewModel.resetGameModeSelection()
-                    navController.popBackStack("menu", inclusive = false)
-                },
-                controlMode = controlMode,
-                gameViewModel = gameViewModel // Pass the ViewModel to the UI
+                settingsViewModel = settingsViewModel,
+                gameViewModel = gameViewModel,
+                navController = navController,
             )
         }
         composable("settings") {
-            SettingsScreen(selectedMode = controlMode, onSelectMode = { mode ->
-                controlMode = mode
-            }, onReturnToMenu = { navController.popBackStack("menu", inclusive = false) })
+            SettingsScreen(navController = navController, viewModel = settingsViewModel)
         }
     }
 }

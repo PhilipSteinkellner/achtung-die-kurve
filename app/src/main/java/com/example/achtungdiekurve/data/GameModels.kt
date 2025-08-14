@@ -1,74 +1,73 @@
 package com.example.achtungdiekurve.data
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import kotlinx.serialization.Serializable
 import kotlin.math.cos
 import kotlin.math.sin
 
-// Data class to represent a single point in a player's trail
-data class TrailSegment(val position: Offset, val isGap: Boolean)
+@Serializable
+data class TrailSegment(
+    @Serializable(with = OffsetSerializer::class) val position: Offset, val isGap: Boolean
+)
 
-// Enum for different control modes
 enum class ControlMode {
     TAP, TILT
 }
 
-// Enum for the player's boost state
-enum class BoostState {
-    READY, BOOSTING, BRAKING, COOLDOWN
+enum class SpecialMoveState {
+    READY, BOOST, SLOW, COOLDOWN
 }
 
-// Data class for player-specific state that is relevant to the UI
-data class PlayerUiState(
-    val trail: List<TrailSegment> = emptyList(),
-    val isAlive: Boolean = true,
-    val boostState: BoostState = BoostState.READY,
-    val boostCooldownFrames: Int = 0,
-    val color: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Gray ,
-    val score : Int = 0
-)
+enum class MatchState {
+    SETUP, MATCH_SETTINGS, RUNNING, ROUND_OVER, GAME_OVER
+}
 
-// Data class for multiplayer-specific UI state
 data class MultiplayerState(
     val isMultiplayer: Boolean = false,
     val isHost: Boolean = false,
     val connectionStatus: String = "Not Connected",
-    val showSetupScreen: Boolean = false
+    val connectedEndpoints: String = "",
+    val searching: Boolean = false
 )
 
 // The main UI state class for the game screen
-data class GameUiState(
-    val localPlayer: PlayerUiState = PlayerUiState(),
-    val opponentPlayer: PlayerUiState = PlayerUiState(),
+data class GameState(
+    val localPlayer: PlayerState = PlayerState(id = "HOST", color = Color.Blue, name = ""),
+    val opponents: List<PlayerState> = listOf(),
     val multiplayerState: MultiplayerState = MultiplayerState(),
     val isRunning: Boolean = false,
-    val isGameOver: Boolean = false,
-    val gameOverMessage: String = "",
-    val showModeSelection: Boolean = true,
-    val screenWidthPx: Float = 0f, // New field
-    val screenHeightPx: Float = 0f, // New field
-    val scoreToWin: Int = 5, // Default
-    val isMatchOver: Boolean = false,
-    val showScoreSetup: Boolean = false,
-    val showGameOver: Boolean = false,
-    val scoreSetupTitle: String = "",
-    val scoreSetupMessage: String = "",
-    val gameOverTitle: String = ""
-
-
+    val screenWidthPx: Float = 0f,
+    val screenHeightPx: Float = 0f,
+    val scoreToWin: Int = 5,
+    val matchState: MatchState = MatchState.SETUP
 )
 
 // Internal data class to hold the full state of a player for game logic
+@Serializable
 data class PlayerState(
     val trail: MutableList<TrailSegment> = mutableListOf(),
     var direction: Float = 0f,
     var turning: Float = 0f,
     var isDrawing: Boolean = true,
     var gapCounter: Int = 0,
-    var boostState: BoostState = BoostState.READY,
+    var boostState: SpecialMoveState = SpecialMoveState.READY,
     var boostFrames: Int = 0,
     var boostCooldownFrames: Int = 0,
     var isAlive: Boolean = true,
-    var score : Int = 0
+    var score: Int = 0,
+    @Serializable(with = ComposeColorSerializer::class) val color: Color,
+    val id: String,
+    var name: String
+)
+
+@Serializable
+data class LatestPlayerState(
+    val id: String,
+    val pos: TrailSegment,
+    val score: Int,
+    val isAlive: Boolean,
+    val boostState: SpecialMoveState,
 )
 
 // Helper function to calculate the next position of a player

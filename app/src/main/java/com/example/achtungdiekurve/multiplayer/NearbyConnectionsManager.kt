@@ -32,25 +32,24 @@ sealed class ConnectionState {
 }
 
 class NearbyConnectionsManager(
-    private val context: Context,
+    context: Context,
     private val serviceId: String,
-    private val onGameDataReceived: (String) -> Unit,
-    private val onConnected: (endpointId: String, isHost: Boolean) -> Unit,
-    private val onDisconnected: () -> Unit
+    private val onGameDataReceived: (String, String) -> Unit,
+    private val onConnected: (endpointId: String, endpointName: String, isHost: Boolean) -> Unit,
+    private val onDisconnect: (endpointId: String) -> Unit,
+    private val onSearching: () -> Unit,
 ) {
     private val connectionsClient: ConnectionsClient = Nearby.getConnectionsClient(context)
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    var connectedEndpointId: String? = null
-        private set
-
+    private val connectedEndpoints = mutableSetOf<String>()
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             if (payload.type == Payload.Type.BYTES) {
                 payload.asBytes()?.let { bytes ->
-                    onGameDataReceived(String(bytes))
+                    onGameDataReceived(endpointId, String(bytes))
                 }
             }
         }
@@ -60,57 +59,69 @@ class NearbyConnectionsManager(
         }
     }
 
+    private val endpointNames = mutableMapOf<String, String>()
+
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            _connectionState.update { ConnectionState.Status("Connection initiated with: ${info.endpointName}") }
-            connectionsClient.acceptConnection(endpointId, payloadCallback).addOnSuccessListener {
-                _connectionState.update { ConnectionState.Status("Accepting connection from: ${info.endpointName}") }
-            }.addOnFailureListener { e ->
-                _connectionState.update { ConnectionState.Error("Failed to accept connection: ${e.message}") }
-                stopAllEndpoints()
+            // Store the endpointName so we can retrieve it later
+            endpointNames[endpointId] = info.endpointName
+
+            if (!_isHost) {
+                _connectionState.update { ConnectionState.Status("Connection initiated with: ${info.endpointName}") }
             }
+            connectionsClient.acceptConnection(endpointId, payloadCallback)
+                .addOnFailureListener { e ->
+                    _connectionState.update { ConnectionState.Error("Failed to accept connection: ${e.message}") }
+                    stopAllEndpoints()
+                }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
+            val endpointName = endpointNames[endpointId] ?: endpointId
+
             when (result.status.statusCode) {
                 ConnectionsStatusCodes.STATUS_OK -> {
-                    connectedEndpointId = endpointId
-                    _connectionState.update { ConnectionState.Connected(endpointId) }
-                    stopAdvertisingAndDiscovery()
-                    onConnected(endpointId, _isHost) // Pass isHost
+                    connectedEndpoints.add(endpointId)
+                    if (!_isHost) {
+                        _connectionState.update { ConnectionState.Status("Connected to $endpointName ($endpointId)") }
+                        stopAdvertisingAndDiscovery()
+                    }
+                    onConnected(endpointId, endpointName, _isHost)
                 }
 
                 ConnectionsStatusCodes.STATUS_CONNECTION_REJECTED -> {
-                    _connectionState.update { ConnectionState.Error("Connection rejected by other device.") }
+                    _connectionState.update { ConnectionState.Error("Connection rejected by $endpointName") }
                     stopAllEndpoints()
                 }
 
                 ConnectionsStatusCodes.STATUS_ERROR -> {
-                    _connectionState.update { ConnectionState.Error("Connection error.") }
+                    _connectionState.update { ConnectionState.Error("Connection error with $endpointName") }
                     stopAllEndpoints()
                 }
 
                 else -> {
-                    _connectionState.update { ConnectionState.Error("Connection failed: ${result.status.statusCode}") }
+                    _connectionState.update { ConnectionState.Error("Connection failed with $endpointName: ${result.status.statusCode}") }
                     stopAllEndpoints()
                 }
             }
         }
 
         override fun onDisconnected(endpointId: String) {
-            _connectionState.update { ConnectionState.Disconnected }
-            connectedEndpointId = null
-            onDisconnected()
-            stopAllEndpoints() // Ensure all related operations are stopped
+            val endpointName = endpointNames[endpointId] ?: "(unknown)"
+            _connectionState.update { ConnectionState.Status("Disconnected from $endpointName") }
+            connectedEndpoints.remove(endpointId)
+            onDisconnect(endpointId)
+            stopAllEndpoints()
         }
     }
 
+
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
+        var nickname = ""
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
             _connectionState.update { ConnectionState.Status("Found host: ${info.endpointName}, requesting connection...") }
             connectionsClient.requestConnection(
-                "Player Device", // TODO: Make configurable
-                endpointId, connectionLifecycleCallback
+                this.nickname, endpointId, connectionLifecycleCallback
             ).addOnSuccessListener {
                 _connectionState.update { ConnectionState.Status("Requested connection to: ${info.endpointName}") }
             }.addOnFailureListener { e ->
@@ -120,25 +131,22 @@ class NearbyConnectionsManager(
         }
 
         override fun onEndpointLost(endpointId: String) {
-            if (connectedEndpointId == null) {
-                _connectionState.update { ConnectionState.Status("Lost discovery of host endpoint") }
-            }
+            _connectionState.update { ConnectionState.Status("Lost discovery of host endpoint") }
         }
     }
 
     private var _isHost: Boolean = false // Internal flag to track if we initiated as host
 
-    fun startHosting() {
+    fun startHosting(nickname: String) {
         _isHost = true
         _connectionState.update { ConnectionState.Connecting }
         _connectionState.update { ConnectionState.Status("Starting to host...") }
+        onSearching()
 
-        val advertisingOptions =
-            AdvertisingOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
+        val advertisingOptions = AdvertisingOptions.Builder().setStrategy(Strategy.P2P_STAR).build()
 
         connectionsClient.startAdvertising(
-            "Game Host", // TODO: Make configurable
-            serviceId, connectionLifecycleCallback, advertisingOptions
+            nickname, serviceId, connectionLifecycleCallback, advertisingOptions
         ).addOnSuccessListener {
             _connectionState.update { ConnectionState.Advertising }
             _connectionState.update { ConnectionState.Status("Waiting for players to join...") }
@@ -148,14 +156,14 @@ class NearbyConnectionsManager(
         }
     }
 
-    fun startDiscovery() {
+    fun startDiscovery(nickname: String) {
         _isHost = false
         _connectionState.update { ConnectionState.Connecting }
         _connectionState.update { ConnectionState.Status("Searching for host...") }
+        onSearching()
 
-        val discoveryOptions =
-            DiscoveryOptions.Builder().setStrategy(Strategy.P2P_POINT_TO_POINT).build()
-
+        val discoveryOptions = DiscoveryOptions.Builder().setStrategy(Strategy.P2P_STAR).build()
+        this.endpointDiscoveryCallback.nickname = nickname
         connectionsClient.startDiscovery(
             serviceId, endpointDiscoveryCallback, discoveryOptions
         ).addOnSuccessListener {
@@ -168,10 +176,17 @@ class NearbyConnectionsManager(
     }
 
     fun sendGameData(data: String) {
-        connectedEndpointId?.let { endpointId ->
-            val payload = Payload.fromBytes(data.toByteArray())
+        val payload = Payload.fromBytes(data.toByteArray())
+        for (endpointId in connectedEndpoints) {
             connectionsClient.sendPayload(endpointId, payload)
         }
+    }
+
+    fun sendGameDataToEndpoint(endpointId: String, data: String) {
+
+        val payload = Payload.fromBytes(data.toByteArray())
+        connectionsClient.sendPayload(endpointId, payload)
+
     }
 
     fun stopAdvertisingAndDiscovery() {
@@ -181,13 +196,8 @@ class NearbyConnectionsManager(
 
     fun stopAllEndpoints() {
         connectionsClient.stopAllEndpoints()
+        connectedEndpoints.clear()
         _connectionState.update { ConnectionState.Disconnected }
-        connectedEndpointId = null
         _isHost = false
-    }
-
-    fun disconnect() {
-        connectedEndpointId?.let { connectionsClient.disconnectFromEndpoint(it) }
-        stopAllEndpoints()
     }
 }

@@ -1,6 +1,5 @@
 package com.example.achtungdiekurve.ui
 
-import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,7 +27,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
@@ -39,45 +41,53 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.achtungdiekurve.data.BoostState
+import androidx.navigation.NavController
 import com.example.achtungdiekurve.data.ControlMode
 import com.example.achtungdiekurve.data.GameConstants
-import com.example.achtungdiekurve.data.GameUiState
-import com.example.achtungdiekurve.data.PlayerUiState
+import com.example.achtungdiekurve.data.GameState
+import com.example.achtungdiekurve.data.MatchState
+import com.example.achtungdiekurve.data.PlayerState
+import com.example.achtungdiekurve.data.SpecialMoveState
 import com.example.achtungdiekurve.game.GameViewModel
 import com.example.achtungdiekurve.game.rememberAccelerometerSensorHandler
+import com.example.achtungdiekurve.settings.SettingsViewModel
+import kotlin.math.roundToInt
 
 @Composable
 fun CurveGameScreen(
     modifier: Modifier = Modifier,
-    onReturnToMenu: () -> Unit,
-    controlMode: ControlMode,
-    gameViewModel: GameViewModel = viewModel()
+    settingsViewModel: SettingsViewModel,
+    gameViewModel: GameViewModel = viewModel(),
+    navController: NavController
 ) {
-    val uiState by gameViewModel.uiState.collectAsState()
-    val localPlayer = uiState.localPlayer
-    val opponentPlayer = uiState.opponentPlayer
-    val multiplayerState = uiState.multiplayerState
-    val screenWidthPx = uiState.screenWidthPx
-    val screenHeightPx = uiState.screenHeightPx
+    val gameState by gameViewModel.gameState.collectAsState()
+    val controlMode by settingsViewModel.controlMode.collectAsState()
+    val nickname by settingsViewModel.nickname.collectAsState()
+    val localWindowInfo = LocalWindowInfo.current
 
-    val showScoreSetup by gameViewModel.shouldShowScoreSetup.collectAsState()
-    val showGameOver by gameViewModel.shouldShowGameOver.collectAsState()
+    if (gameState.multiplayerState.isHost) {
+        LaunchedEffect(
+            LocalWindowInfo.current.containerSize.width,
+            LocalWindowInfo.current.containerSize.height
+        ) {
+            val currentScreenWidthPx =
+                with(LocalDensity) { localWindowInfo.containerSize.width.toFloat() }
+            val currentScreenHeightPx =
+                with(LocalDensity) { localWindowInfo.containerSize.height.toFloat() }
 
-    val density = LocalDensity.current
-    val localWindow = LocalWindowInfo.current
-
-    LaunchedEffect(
-        LocalWindowInfo.current.containerSize.width, LocalWindowInfo.current.containerSize.height
-    ) {
-        val currentScreenWidthPx = with(density) { localWindow.containerSize.width.toFloat() }
-        val currentScreenHeightPx = with(density) { localWindow.containerSize.height.toFloat() }
-
-        if (currentScreenWidthPx > 0 && currentScreenHeightPx > 0) {
-            gameViewModel.initializeGamePositions(currentScreenWidthPx, currentScreenHeightPx)
+            if (currentScreenWidthPx > 0 && currentScreenHeightPx > 0) {
+                gameViewModel.initializeGamePositions(
+                    currentScreenWidthPx - GameConstants.WALL_MARGIN,
+                    currentScreenHeightPx - GameConstants.WALL_MARGIN
+                )
+            }
         }
     }
 
+    if (gameState.multiplayerState.connectionStatus == "Disconnected") {
+        gameViewModel.resetGameModeSelection()
+        navController.popBackStack("menu", inclusive = false)
+    }
 
     if (controlMode == ControlMode.TILT) {
         rememberAccelerometerSensorHandler { tiltValue ->
@@ -85,34 +95,18 @@ fun CurveGameScreen(
         }
     }
 
-    // Check if we should show the score setup screen before match
-    //  val showScoreSetup = multiplayerState.isHost &&
-            //        !uiState.isRunning &&
-            //        !uiState.isGameOver &&
-            //        uiState.localPlayer.score == 0 &&
-            //        uiState.opponentPlayer.score == 0
-
-    // Check if we should show the score setup screen after match
-    //  val showScoreSetupAfterMatch = multiplayerState.isHost &&
-    //        uiState.isMatchOver &&
-    //        !uiState.isRunning
-
-    // Check if one or the other condition is true.
-    //  val shouldShowScoreSetup = showScoreSetup || showScoreSetupAfterMatch
-
-
     Box(
         modifier = Modifier
             .fillMaxSize()
             .pointerInput(
                 controlMode,
-                uiState.isRunning,
-                uiState.isGameOver,
-                localPlayer.isAlive,
-                localPlayer.boostState
+                gameState.isRunning,
+                gameState.matchState,
+                gameState.localPlayer.isAlive,
+                gameState.localPlayer.boostState
             ) {
                 detectTapGestures(onPress = {
-                    if (controlMode != ControlMode.TAP || !uiState.isRunning || uiState.isGameOver || !localPlayer.isAlive) return@detectTapGestures
+                    if (controlMode != ControlMode.TAP || !gameState.isRunning || !gameState.localPlayer.isAlive) return@detectTapGestures
 
                     gameViewModel.setLocalTurning(if (it.x < size.width / 2) -1f else 1f)
                     try {
@@ -122,7 +116,9 @@ fun CurveGameScreen(
                     }
                 })
             }
-            .pointerInput(localPlayer.isAlive, localPlayer.boostState, uiState.isRunning) {
+            .pointerInput(
+                gameState.localPlayer.isAlive, gameState.localPlayer.boostState, gameState.isRunning
+            ) {
                 var totalDragAmount = 0f
                 detectVerticalDragGestures(onDragStart = { offset ->
                     totalDragAmount = 0f
@@ -130,12 +126,12 @@ fun CurveGameScreen(
                     totalDragAmount += dragAmount
                     change.consume()
                 }, onDragEnd = {
-                    if (!uiState.isRunning || !localPlayer.isAlive || localPlayer.boostState != BoostState.READY) return@detectVerticalDragGestures
+                    if (!gameState.isRunning || !gameState.localPlayer.isAlive || gameState.localPlayer.boostState != SpecialMoveState.READY) return@detectVerticalDragGestures
 
                     if (totalDragAmount < -GameConstants.SWIPE_THRESHOLD) {
-                        gameViewModel.toggleBoost(BoostState.BOOSTING)
+                        gameViewModel.toggleBoost(SpecialMoveState.BOOST)
                     } else if (totalDragAmount > GameConstants.SWIPE_THRESHOLD) {
-                        gameViewModel.toggleBoost(BoostState.BRAKING)
+                        gameViewModel.toggleBoost(SpecialMoveState.SLOW)
                     }
                     totalDragAmount = 0f
                 }, onDragCancel = {
@@ -143,99 +139,123 @@ fun CurveGameScreen(
                 })
             }) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            drawPlayerTrail(localPlayer)
-            if (multiplayerState.isMultiplayer) {
-                drawPlayerTrail(opponentPlayer)
+            // background (whole canvas)
+            drawRect(
+                color = Color.Black, size = size
+            )
+
+            // White inner area
+            drawRect(
+                color = Color.White, topLeft = Offset(
+                    (size.width - gameState.screenWidthPx) / 2f,
+                    (size.height - gameState.screenHeightPx) / 2f
+                ), size = Size(
+                    gameState.screenWidthPx, gameState.screenHeightPx
+                )
+            )
+            drawPlayerTrail(gameState.localPlayer)
+            gameState.opponents.forEach { drawPlayerTrail(it) }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.Top
+        ) {
+            Text(
+                text = if (!gameState.multiplayerState.isMultiplayer) "Mode: Single Player"
+                else "Role: ${if (gameState.multiplayerState.isHost) "Host" else "Client"}",
+                fontSize = 12.sp,
+                color = Color.Black,
+                modifier = Modifier.padding(8.dp),
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Top
+        ) {
+            if (gameState.multiplayerState.isHost) {
+                Button(
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .alpha(0.5f),
+                    onClick = { gameViewModel.toggleGameRunning() }) {
+                    Text(if (gameState.isRunning) "Pause" else "Resume")
+                }
+            }
+
+            if (!gameState.isRunning && !gameState.multiplayerState.isHost) Button(
+                modifier = Modifier.padding(8.dp),
+                onClick = { navController.navigate("menu");gameViewModel.resetGameModeSelection() }) {
+                Text(
+                    text = "Menu"
+                )
             }
         }
 
-        GameHud(
-            modifier = modifier,
-            uiState = uiState,
-            onPauseResumeClick = { gameViewModel.toggleGameRunning() },
-            showScoreSetup = showScoreSetup        )
-
-        // Score Setup Overlay
-        if (showScoreSetup) {
+        if (gameState.matchState != MatchState.RUNNING) {
             GameOverlay(
-                title = uiState.scoreSetupTitle,
-                message = uiState.scoreSetupMessage
+                gameState, gameViewModel, navController = navController, nickname = nickname
+            )
+        }
+
+
+        // Boost Status
+        if (gameState.localPlayer.isAlive) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Bottom
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Button(onClick = { gameViewModel.decrementScoreToWin() }) {
-                        Text("-", fontSize = 20.sp)
-                    }
-
-                    Text(
-                        text = "${uiState.scoreToWin}",
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black
-                    )
-
-                    Button(onClick = { gameViewModel.incrementScoreToWin() }) {
-                        Text("+", fontSize = 20.sp)
-                    }
+                val (text, color) = when (gameState.localPlayer.boostState) {
+                    SpecialMoveState.READY -> "Special Move Ready! (Swipe Up/Down)" to Color.Green
+                    SpecialMoveState.BOOST -> "Boost Mode..." to Color.Magenta
+                    SpecialMoveState.SLOW -> "Slow Mode..." to Color.Magenta
+                    SpecialMoveState.COOLDOWN -> "Cooldown ${gameState.localPlayer.boostCooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).roundToInt()}s" to Color.Black
                 }
 
                 Text(
-                    text = if (uiState.scoreToWin == 1) "round" else "rounds",
+                    text = text,
+                    color = color,
                     fontSize = 16.sp,
-                    color = Color.Gray
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .alpha(0.5f),
+                    textAlign = TextAlign.Center
                 )
 
-                Button(
-                    onClick = { gameViewModel.onScoreSetupStartGame() },
-                    modifier = Modifier.padding(top = 8.dp)
-                ) {
-                    Text(
-                        text = if (uiState.isMatchOver) "Start New Match" else "Start Game",
-                        fontSize = 18.sp
-                    )
-                }
             }
+
         }
 
-        // Game Over Overlay
-        if (showGameOver) {
-            GameOverlay(
-                title = uiState.gameOverTitle,
-                message = uiState.gameOverMessage
-            ) {
-                Button(onClick = { gameViewModel.onGameOverNewGame() }) {
-                    Text(
-                        text = if (uiState.isMatchOver) "New Game" else "Next Round",
-                        fontSize = 18.sp
-                    )
-                }
-
-                Button(
-                    onClick = onReturnToMenu,
-                    modifier = Modifier.padding(top = 8.dp)
-                ) {
-                    Text("Back to Menu", fontSize = 18.sp)
-                }
-            }
-        }
     }
 }
 
 
-
-
-
-
-
-private fun DrawScope.drawPlayerTrail(playerState: PlayerUiState) {
+private fun DrawScope.drawPlayerTrail(playerState: PlayerState) {
     for (i in 1 until playerState.trail.size) {
         val start = playerState.trail[i - 1]
         val end = playerState.trail[i]
         if (!start.isGap && !end.isGap) {
+            val color = when {
+                !playerState.isAlive -> Color.Gray
+                playerState.boostState == SpecialMoveState.BOOST -> Color.Magenta
+                playerState.boostState == SpecialMoveState.SLOW -> Color.Magenta
+                else -> playerState.color
+            }
+
             drawLine(
-                color = playerState.color,
+                color = color,
                 start = start.position,
                 end = end.position,
                 strokeWidth = GameConstants.STROKE_WIDTH
@@ -246,9 +266,10 @@ private fun DrawScope.drawPlayerTrail(playerState: PlayerUiState) {
 
 @Composable
 fun GameOverlay(
-    title: String,
-    message: String,
-    content: @Composable () -> Unit
+    gameState: GameState,
+    gameViewModel: GameViewModel,
+    navController: NavController,
+    nickname: String
 ) {
     Box(
         modifier = Modifier
@@ -256,76 +277,117 @@ fun GameOverlay(
             .background(Color.Black.copy(alpha = 0.7f)),
         contentAlignment = Alignment.Center
     ) {
-        Card(
-            modifier = Modifier.padding(32.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+
+        if (gameState.multiplayerState.isHost) {
+
+            Card(
+                modifier = Modifier.padding(32.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
-                Text(
-                    text = title,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black,
-                    textAlign = TextAlign.Center
-                )
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    if (gameState.matchState != MatchState.MATCH_SETTINGS) Text(
+                        text = if (gameState.matchState == MatchState.GAME_OVER) "Game Over" else "Round Over",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black,
+                        textAlign = TextAlign.Center
+                    )
+                    if (!gameState.multiplayerState.isMultiplayer || gameState.matchState == MatchState.ROUND_OVER || gameState.matchState == MatchState.GAME_OVER) {
+                        if (gameState.multiplayerState.isHost) {
+                            Button(onClick = { gameViewModel.onGameOverNewGame() }) {
+                                Text(
+                                    text = if (gameState.matchState == MatchState.GAME_OVER) "New Game" else "Next Round",
+                                    fontSize = 18.sp
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    navController.navigate("menu")
+                                    gameViewModel.resetGameModeSelection()
+                                }) {
+                                Text(
+                                    text = "Menu", fontSize = 18.sp
+                                )
+                            }
+                        }
+                    } else if (gameState.matchState == MatchState.MATCH_SETTINGS) {
+                        Text(
+                            text = "Game Setup",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.Black,
+                            textAlign = TextAlign.Center
+                        )
 
-                Text(
-                    text = message,
-                    fontSize = 18.sp,
-                    color = Color.DarkGray,
-                    textAlign = TextAlign.Center
-                )
+                        Text(
+                            text = "First to win:",
+                            fontSize = 18.sp,
+                            color = Color.DarkGray,
+                            textAlign = TextAlign.Center
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Button(onClick = { gameViewModel.decrementScoreToWin() }) {
+                                Text("-", fontSize = 20.sp)
+                            }
 
-                content()
+                            Text(
+                                text = "${gameState.scoreToWin}",
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black
+                            )
+
+                            Button(onClick = { gameViewModel.incrementScoreToWin() }) {
+                                Text("+", fontSize = 20.sp)
+                            }
+                        }
+
+                        Text(
+                            text = if (gameState.scoreToWin == 1) "point" else "points",
+                            fontSize = 16.sp,
+                            color = Color.Gray
+                        )
+
+                        Button(
+                            onClick = { gameViewModel.onScoreSetupStartGame() },
+                            modifier = Modifier.padding(top = 8.dp)
+                        ) {
+                            Text(
+                                text = "Start Game", fontSize = 18.sp
+                            )
+                        }
+
+                    }
+                }
             }
         }
+
+        ScoreCard(
+            gameState = gameState, nickname = nickname
+        )
+
     }
 }
 
 @Composable
-fun GameHud(
-    modifier: Modifier,
-    uiState: GameUiState,
-    onPauseResumeClick: () -> Unit,
-    showScoreSetup: Boolean
+fun ScoreCard(
+    gameState: GameState,
+    nickname: String,
 ) {
-    val multiplayerState = uiState.multiplayerState
-
-    // Only show control buttons if overlays are not active
-    if (!showScoreSetup && !uiState.isGameOver) {
-        Column(
-            modifier = modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Button(onClick = onPauseResumeClick) {
-                Text(if (uiState.isRunning) "Pause" else "Resume")
-            }
-        }
-    }
-
-    // Connection status at the top-left
-    if (!showScoreSetup) {
-        Text(
-            text = if (!multiplayerState.isMultiplayer) "Mode: Single Player"
-            else "Role: ${if (multiplayerState.isHost) "Host" else "Client"} | ${multiplayerState.connectionStatus}",
-            fontSize = 12.sp,
-            color = Color.Black,
-            modifier = Modifier.padding(8.dp)
-        )
-    }
-
-    // Bottom-aligned Score Display with Boost Status
-    if (!showScoreSetup) {
+    if (!gameState.isRunning) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp),
+                .padding(20.dp, 50.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Bottom
         ) {
@@ -337,8 +399,8 @@ fun GameHud(
                     .shadow(8.dp, RoundedCornerShape(16.dp))
                     .border(2.dp, Color.Black.copy(alpha = 0.1f), RoundedCornerShape(16.dp)),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.9f)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
@@ -356,104 +418,72 @@ fun GameHud(
                             Box(
                                 modifier = Modifier
                                     .size(48.dp)
-                                    .background(uiState.localPlayer.color, CircleShape)
+                                    .background(gameState.localPlayer.color, CircleShape)
                                     .border(2.dp, Color.Black.copy(alpha = 0.2f), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "${uiState.localPlayer.score}",
+                                    text = "${gameState.localPlayer.score}",
                                     fontSize = 24.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
                             }
                             Text(
-                                text = "You",
+                                text = nickname.ifEmpty { "You" },
                                 fontSize = 12.sp,
                                 color = Color.Gray,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
 
-                        // VS Text
-                        Text(
-                            text = "VS",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.DarkGray,
-                            modifier = Modifier.padding(horizontal = 24.dp)
-                        )
-
-                        // Opponent Score
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .background(uiState.opponentPlayer.color, CircleShape)
-                                    .border(2.dp, Color.Black.copy(alpha = 0.2f), CircleShape),
-                                contentAlignment = Alignment.Center
+                        for (player in gameState.opponents) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .background(player.color, CircleShape)
+                                        .border(
+                                            2.dp, Color.Black.copy(alpha = 0.2f), CircleShape
+                                        ), contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "${player.score}",
+                                        fontSize = 24.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
                                 Text(
-                                    text = "${uiState.opponentPlayer.score}",
-                                    fontSize = 24.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    text = player.name,
+                                    fontSize = 12.sp,
+                                    color = Color.Gray,
+                                    modifier = Modifier.padding(top = 4.dp)
                                 )
                             }
-                            Text(
-                                text = if (multiplayerState.isMultiplayer) "Opponent" else "AI",
-                                fontSize = 12.sp,
-                                color = Color.Gray,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
+
                         }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // First to X wins text
-                    Box(
+                    if (gameState.multiplayerState.isMultiplayer) Box(
                         modifier = Modifier
-                            .background(Color.Gray.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                            .background(
+                                Color.Gray.copy(alpha = 0.1f), RoundedCornerShape(8.dp)
+                            )
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = "First to ${uiState.scoreToWin} wins!",
+                            text = "First to ${gameState.scoreToWin} points!",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium,
                             color = Color.DarkGray
                         )
                     }
-                }
-            }
-
-            // Boost Status (only show if player is alive)
-            if (uiState.localPlayer.isAlive) {
-                val (text, color) = when (uiState.localPlayer.boostState) {
-                    BoostState.READY -> "Boost Ready! (Swipe Up/Down)" to Color.Green
-                    BoostState.BOOSTING -> "Boosting..." to Color.Magenta
-                    BoostState.BRAKING -> "Braking..." to Color.Magenta
-                    BoostState.COOLDOWN -> "Boost ready in ${uiState.localPlayer.boostCooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).toInt()}s" to Color.Black
-                }
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White.copy(alpha = 0.8f)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                ) {
-                    Text(
-                        text = text,
-                        color = color,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        textAlign = TextAlign.Center
-                    )
                 }
             }
         }

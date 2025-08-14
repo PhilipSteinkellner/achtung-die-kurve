@@ -2,15 +2,15 @@ package com.example.achtungdiekurve.game
 
 import android.app.Application
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.achtungdiekurve.data.BoostState
 import com.example.achtungdiekurve.data.GameConstants
-import com.example.achtungdiekurve.data.GameUiState
+import com.example.achtungdiekurve.data.GameState
+import com.example.achtungdiekurve.data.LatestPlayerState
+import com.example.achtungdiekurve.data.MatchState
 import com.example.achtungdiekurve.data.MultiplayerState
 import com.example.achtungdiekurve.data.PlayerState
-import com.example.achtungdiekurve.data.PlayerUiState
+import com.example.achtungdiekurve.data.SpecialMoveState
 import com.example.achtungdiekurve.data.TrailSegment
 import com.example.achtungdiekurve.data.calculateNextPosition
 import com.example.achtungdiekurve.data.distanceFromPointToSegment
@@ -19,29 +19,21 @@ import com.example.achtungdiekurve.multiplayer.NearbyConnectionsManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlin.math.PI
 import kotlin.random.Random
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
-
-    //TODO a menu to let the client player quit- and boot them to the main menu when host leaves.
-
-    private val _uiState = MutableStateFlow(GameUiState())
-    val uiState: StateFlow<GameUiState> = _uiState.asStateFlow()
-
-    private val hostPlayerState = PlayerState()
-    private val clientPlayerState = PlayerState()
-
+    private val _gameState = MutableStateFlow(GameState())
+    val gameState: StateFlow<GameState> = _gameState.asStateFlow()
+    private val clientPlayerStates = mutableMapOf<String, PlayerState>()
+    private val localPlayer = gameState.value.localPlayer.copy()
     private var gameLoopJob: Job? = null
-    private var connectedEndpointId: String? = null
 
     private val nearbyConnectionsManager: NearbyConnectionsManager by lazy {
         NearbyConnectionsManager(
@@ -49,7 +41,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             serviceId = "com.example.achtungdiekurve",
             onGameDataReceived = ::handleGameDataReceived,
             onConnected = ::onNearbyConnected,
-            onDisconnected = ::onNearbyDisconnected
+            onDisconnect = ::onNearbyDisconnected,
+            onSearching = {
+                _gameState.update {
+                    it.copy(
+                        multiplayerState = it.multiplayerState.copy(searching = true)
+                    )
+                }
+            },
         )
     }
 
@@ -60,7 +59,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeConnectionState() {
         viewModelScope.launch {
             nearbyConnectionsManager.connectionState.collect { connectionState ->
-                if (_uiState.value.multiplayerState.isMultiplayer) {
+                if (_gameState.value.multiplayerState.isMultiplayer) {
                     handleMultiplayerStateChange(connectionState)
                 }
             }
@@ -70,54 +69,52 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleMultiplayerStateChange(connectionState: ConnectionState) {
         val newMultiplayerState = when (connectionState) {
             is ConnectionState.Connected -> {
-                connectedEndpointId = connectionState.endpointId
-                _uiState.value.multiplayerState.copy(
-                    connectionStatus = "Connected!", showSetupScreen = false
+                _gameState.value.multiplayerState.copy(
+                    connectionStatus = "Connected!",
                 )
             }
 
             is ConnectionState.Disconnected -> {
                 resetGame()
-                _uiState.value.multiplayerState.copy(
-                    connectionStatus = "Disconnected", showSetupScreen = true, isHost = false
+                _gameState.value.multiplayerState.copy(
+                    connectionStatus = "Disconnected", isHost = false
                 )
             }
 
-            is ConnectionState.Error -> _uiState.value.multiplayerState.copy(
-                connectionStatus = "Error: ${connectionState.message}", showSetupScreen = true
+            is ConnectionState.Error -> _gameState.value.multiplayerState.copy(
+                connectionStatus = "Error: ${connectionState.message}"
             )
 
-            is ConnectionState.Status -> _uiState.value.multiplayerState.copy(connectionStatus = connectionState.message)
-            ConnectionState.Advertising -> _uiState.value.multiplayerState.copy(
-                connectionStatus = "Waiting for players...", showSetupScreen = true
+            is ConnectionState.Status -> _gameState.value.multiplayerState.copy(connectionStatus = connectionState.message)
+            ConnectionState.Advertising -> _gameState.value.multiplayerState.copy(
+                connectionStatus = "Waiting for players...",
             )
 
-            ConnectionState.Discovering -> _uiState.value.multiplayerState.copy(
-                connectionStatus = "Searching for games...", showSetupScreen = true
+            ConnectionState.Discovering -> _gameState.value.multiplayerState.copy(
+                connectionStatus = "Searching for games...",
             )
 
-            ConnectionState.Connecting -> _uiState.value.multiplayerState.copy(
-                connectionStatus = "Connecting...", showSetupScreen = true
+            ConnectionState.Connecting -> _gameState.value.multiplayerState.copy(
+                connectionStatus = "Connecting...",
             )
         }
-        _uiState.update { it.copy(multiplayerState = newMultiplayerState) }
+        _gameState.update { it.copy(multiplayerState = newMultiplayerState) }
     }
 
     fun selectSinglePlayerMode() {
-        _uiState.update {
+        _gameState.update {
             it.copy(
                 multiplayerState = MultiplayerState(isMultiplayer = false, isHost = true),
-                showModeSelection = false,
+                matchState = MatchState.MATCH_SETTINGS
             )
         }
         resetGame()
     }
 
     fun selectMultiplayerMode() {
-        _uiState.update {
+        _gameState.update {
             it.copy(
-                multiplayerState = MultiplayerState(isMultiplayer = true, showSetupScreen = true),
-                showModeSelection = false
+                multiplayerState = MultiplayerState(isMultiplayer = true)
             )
         }
         resetGame()
@@ -126,98 +123,107 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun resetGameModeSelection() {
         stopGameLoop()
         nearbyConnectionsManager.stopAllEndpoints()
-        _uiState.update {
-            GameUiState(showModeSelection = true) // Reset to initial state
+        _gameState.update {
+            GameState(matchState = MatchState.SETUP) // Reset to initial state
         }
         resetGame()
+    }
+
+    fun changeMatchState(matchState: MatchState) {
+        _gameState.update {
+            it.copy(
+                matchState = matchState
+            )
+        }
+        sendMatchState()
     }
 
     // --- Nearby Connections Callbacks ---
-    private fun onNearbyConnected(endpointId: String, isHost: Boolean) {
-        this.connectedEndpointId = endpointId
-        _uiState.update {
+    private fun onNearbyConnected(endpointId: String, endpointName: String, isHost: Boolean) {
+        //this.connectedEndpointId = endpointId
+        _gameState.update {
             it.copy(
                 multiplayerState = it.multiplayerState.copy(
-                    isHost = isHost, showSetupScreen = false
-                )
+                    isHost = isHost,
+                ),
             )
         }
-        resetGame()
+
+        if (isHost) {
+            clientPlayerStates.put(
+                endpointId, PlayerState(
+                    color = GameConstants.COLORS.first { c -> clientPlayerStates.none { it.value.color == c } },
+                    id = endpointId,
+                    name = endpointName
+                )
+            )
+            _gameState.update {
+                it.copy(
+                    multiplayerState = it.multiplayerState.copy(
+                        connectedEndpoints = clientPlayerStates.values.joinToString(", ") { "${it.name} (${it.id})" })
+                )
+            }
+            resetGame()
+        } else {
+            _gameState.update {
+                it.copy(
+                    multiplayerState = it.multiplayerState.copy(
+                        searching = false
+                    )
+
+                )
+            }
+        }
     }
 
-    private fun onNearbyDisconnected() {
-        // Handled by the state flow collector
+    private fun onNearbyDisconnected(endpointId: String) {
+        clientPlayerStates.remove(endpointId)
     }
 
     private fun isHost(): Boolean {
-        return uiState.value.multiplayerState.isHost
+        return gameState.value.multiplayerState.isHost
     }
 
     private fun isMultiplayer(): Boolean {
-        return uiState.value.multiplayerState.isMultiplayer
+        return gameState.value.multiplayerState.isMultiplayer
     }
 
     // --- Game Controls ---
     fun setLocalTurning(turning: Float) {
         if (isHost()) {
-            hostPlayerState.turning = turning
+            localPlayer.turning = turning
         } else {
-            clientPlayerState.turning = turning
-            connectedEndpointId?.let { endpoint ->
-                nearbyConnectionsManager.sendGameData("client_input:turning:$turning")
-            }
+            nearbyConnectionsManager.sendGameData("client_input:turning:$turning")
         }
     }
 
-    fun toggleBoost(mode: BoostState) {
+    fun toggleBoost(mode: SpecialMoveState) {
         if (isHost()) {
             // Host toggles its own boost
-            if (hostPlayerState.isAlive && hostPlayerState.boostState == BoostState.READY) {
-                hostPlayerState.boostState = mode
-                hostPlayerState.boostFrames = 0
+            if (localPlayer.isAlive && localPlayer.boostState == SpecialMoveState.READY) {
+                localPlayer.boostState = mode
+                localPlayer.boostFrames = 0
             }
         } else {
-            // Client sends boost toggle to host
-            if (clientPlayerState.isAlive && clientPlayerState.boostState == BoostState.READY) {
-                // Client's boost state is speculative until confirmed by host, but update locally for responsiveness
-                clientPlayerState.boostState = mode
-                clientPlayerState.boostFrames = 0
-                connectedEndpointId?.let { endpoint ->
-                    nearbyConnectionsManager.sendGameData("client_input:boost:$mode")
-                }
-            }
+            nearbyConnectionsManager.sendGameData("client_input:boost:$mode")
         }
     }
 
     fun toggleGameRunning() {
-        val newIsRunning = !_uiState.value.isRunning
-        _uiState.update { it.copy(isRunning = newIsRunning) }
+        if (!isHost()) return
 
-        if (isMultiplayer()) {
-            if (isHost()) {
-                if (newIsRunning) {
-                    startGameLoop(
-                        _uiState.value.screenWidthPx,
-                        _uiState.value.screenHeightPx
-                    )
-                } else {
-                    stopGameLoop()
-                }
+        val newIsRunning = !_gameState.value.isRunning
+        _gameState.update { it.copy(isRunning = newIsRunning) }
 
-                nearbyConnectionsManager.sendGameData("game_running_status:$newIsRunning")
-            } else {
-                nearbyConnectionsManager.sendGameData("request_game_running_status:$newIsRunning")
-            }
+        if (newIsRunning) {
+            startGameLoop(
+                _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
+            )
         } else {
-            if (newIsRunning) {
-                startGameLoop(
-                    _uiState.value.screenWidthPx,
-                    _uiState.value.screenHeightPx
-                )
-            } else {
-                stopGameLoop()
-            }
+            stopGameLoop()
         }
+
+        nearbyConnectionsManager.sendGameData("game_running_status:$newIsRunning")
     }
 
     fun resetGameRound() {
@@ -225,46 +231,40 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             stopGameLoop()
 
             // If match is over, start a new match
-            if (_uiState.value.isMatchOver) {
+            if (_gameState.value.matchState == MatchState.GAME_OVER) {
                 // Full reset including scores
-                hostPlayerState.reset()
-                clientPlayerState.reset()
-                _uiState.update {
+                localPlayer.reset()
+                clientPlayerStates.forEach { it.value.reset() }
+                _gameState.update {
                     it.copy(
-                        localPlayer = PlayerUiState(),
-                        opponentPlayer = PlayerUiState(),
-                        isRunning = true, // Auto-start the game
-                        isGameOver = false,
-                        gameOverMessage = "",
-                        isMatchOver = false
+                        localPlayer = localPlayer.toUiState(),
+                        opponents = clientPlayerStates.values.map { it.toUiState() },
+                        matchState = MatchState.RUNNING
                     )
                 }
                 // Tell client to do a full reset
                 nearbyConnectionsManager.sendGameData("reset_match:")
             } else {
                 // Just reset for new round, keep scores
-                hostPlayerState.resetForNewRound()
-                clientPlayerState.resetForNewRound()
-                _uiState.update {
+                localPlayer.resetForNewRound()
+                clientPlayerStates.forEach { it.value.resetForNewRound() }
+                _gameState.update {
                     it.copy(
                         // Keep the scores in UI
-                        localPlayer = PlayerUiState(score = hostPlayerState.score),
-                        opponentPlayer = PlayerUiState(score = clientPlayerState.score),
-                        isRunning = true, // Auto-start the game
-                        isGameOver = false,
-                        gameOverMessage = ""
+                        localPlayer = localPlayer.toUiState(),
+                        opponents = clientPlayerStates.values.map { it.toUiState() },
+                        matchState = MatchState.RUNNING
                     )
                 }
                 // Tell client to reset for new round only
                 nearbyConnectionsManager.sendGameData("reset_round:")
             }
-
+            sendMatchState()
             // Send the running status to client
             nearbyConnectionsManager.sendGameData("game_running_status:true")
 
             startGameLoop(
-                _uiState.value.screenWidthPx,
-                _uiState.value.screenHeightPx
+                _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
             )
         } else {
             // Client requests host to reset
@@ -276,65 +276,59 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!isHost()) return
 
         // Reset scores and start fresh
-        hostPlayerState.reset()
-        clientPlayerState.reset()
+        localPlayer.reset()
+        clientPlayerStates.forEach { it.value.reset() }
 
-        _uiState.update {
+        _gameState.update {
             it.copy(
-                localPlayer = PlayerUiState(),
-                opponentPlayer = PlayerUiState(),
-                isMatchOver = false,
-                isGameOver = false,
-                gameOverMessage = "",
-                isRunning = true
+                localPlayer = localPlayer.toUiState(),
+                opponents = clientPlayerStates.values.map { it.toUiState() },
+                matchState = MatchState.RUNNING
             )
         }
 
         // Tell client to reset everything
         nearbyConnectionsManager.sendGameData("reset_match:")
         nearbyConnectionsManager.sendGameData("game_running_status:true")
+        sendMatchState()
 
         initializeGamePositions(
-            _uiState.value.screenWidthPx,
-            _uiState.value.screenHeightPx
+            _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
         )
         startGameLoop(
-            _uiState.value.screenWidthPx,
-            _uiState.value.screenHeightPx
+            _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
         )
     }
 
     fun setScoreToWin(score: Int) {
         if (!isHost()) return // Only host can set this
-        _uiState.update { it.copy(scoreToWin = score) }
+        _gameState.update { it.copy(scoreToWin = score) }
         // Inform the client of the new setting
         nearbyConnectionsManager.sendGameData("set_score_to_win:$score")
     }
 
 
-    fun startHostingGame() {
+    fun startHostingGame(nickname: String) {
         if (!isMultiplayer()) return
-        nearbyConnectionsManager.startHosting()
+        localPlayer.name = nickname
+        nearbyConnectionsManager.startHosting(nickname)
     }
 
-    fun startJoiningGame() {
+    fun startJoiningGame(nickname: String) {
         if (!isMultiplayer()) return
-        nearbyConnectionsManager.startDiscovery()
+        localPlayer.name = nickname
+        nearbyConnectionsManager.startDiscovery(nickname)
     }
 
     // --- Game Logic ---
     private fun resetGame() {
         stopGameLoop()
-        hostPlayerState.reset()
-        clientPlayerState.reset()
-        _uiState.update {
+        localPlayer.reset()
+        clientPlayerStates.forEach { it.value.reset() }
+        _gameState.update {
             it.copy(
-                localPlayer = PlayerUiState(),
-                opponentPlayer = PlayerUiState(),
-                isRunning = false,
-                isGameOver = false,
-                gameOverMessage = "",
-                isMatchOver = false
+                localPlayer = localPlayer.toUiState(),
+                opponents = clientPlayerStates.values.map { it.toUiState() },
             )
         }
     }
@@ -342,52 +336,70 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun initializeGamePositions(screenWidthPx: Float, screenHeightPx: Float) {
         if (!isHost()) return
 
-        // Update screen dimensions in UI state
-        _uiState.update {
+        _gameState.update {
             it.copy(
-                screenWidthPx = screenWidthPx,
-                screenHeightPx = screenHeightPx
+                screenWidthPx = screenWidthPx, screenHeightPx = screenHeightPx
             )
         }
 
-        // Force initialization if game is over or match is over
-        // Only initialize if trails are empty to prevent re-initialization on config changes
-        val shouldInitialize = hostPlayerState.trail.isEmpty() ||
-                clientPlayerState.trail.isEmpty() ||
-                _uiState.value.isGameOver ||
-                _uiState.value.isMatchOver
+        val shouldInitialize =
+            localPlayer.trail.isEmpty() || clientPlayerStates.all { it.value.trail.isEmpty() } || gameState.value.matchState != MatchState.RUNNING
 
         if (!shouldInitialize) return
 
+        val takenPositions = mutableListOf<Offset>()
+        val edgeMargin = GameConstants.SPAWN_EDGE_MARGIN
+        val playerMargin = GameConstants.SPAWN_PLAYER_MARGIN
+
         fun randomOffset(): Offset {
-            val x = Random.nextFloat() * (screenWidthPx - 2 * GameConstants.SPAWN_MARGIN) + GameConstants.SPAWN_MARGIN
-            val y = Random.nextFloat() * (screenHeightPx - 2 * GameConstants.SPAWN_MARGIN) + GameConstants.SPAWN_MARGIN
-            return Offset(x, y)
+            var pos: Offset
+            var tries = 0
+            do {
+                val x =
+                    Random.nextFloat() * (gameState.value.screenWidthPx - 2 * edgeMargin) + edgeMargin
+                val y =
+                    Random.nextFloat() * (gameState.value.screenHeightPx - 2 * edgeMargin) + edgeMargin
+                pos = Offset(x, y)
+                tries++
+            } while (takenPositions.any { other -> (pos - other).getDistance() < playerMargin } && tries < 100)
+            takenPositions.add(pos)
+            return pos
         }
 
         // Clear trails before adding new positions
-        hostPlayerState.trail.clear()
-        clientPlayerState.trail.clear()
+        localPlayer.trail.clear()
+        clientPlayerStates.forEach { it.value.trail.clear() }
 
-        // host defines initial state for both
+        // Host player
         val hostStartPos = randomOffset()
         val hostStartDir = Random.nextFloat() * 2 * PI.toFloat()
+        localPlayer.trail.add(TrailSegment(hostStartPos, isGap = false))
+        localPlayer.direction = hostStartDir
 
-        val clientStartPos = randomOffset()
-        val clientStartDir = Random.nextFloat() * 2 * PI.toFloat()
+        // Client players
+        clientPlayerStates.forEach {
+            val clientStartPos = randomOffset()
+            val clientStartDir = Random.nextFloat() * 2 * PI.toFloat()
+            it.value.trail.add(TrailSegment(clientStartPos, isGap = false))
+            it.value.direction = clientStartDir
+        }
 
-        hostPlayerState.trail.add(TrailSegment(hostStartPos, isGap = false))
-        hostPlayerState.direction = hostStartDir
-
-        clientPlayerState.trail.add(TrailSegment(clientStartPos, isGap = false))
-        clientPlayerState.direction = clientStartDir
-
-        // Update UI based on who 'local' and 'opponent' are for this device
-        _uiState.update {
-            it.copy(
-                localPlayer = hostPlayerState.toUiState(true),
-                opponentPlayer = clientPlayerState.toUiState(false)
+        if (_gameState.value.multiplayerState.isMultiplayer) {
+            val gameStateString = serializeFullState()
+            for (clientPlayer in clientPlayerStates) {
+                nearbyConnectionsManager.sendGameDataToEndpoint(
+                    clientPlayer.key, "player_state_full_sync:${clientPlayer.key}:$gameStateString"
+                )
+            }
+            nearbyConnectionsManager.sendGameData(
+                "screen_dimensions:${gameState.value.screenWidthPx},${gameState.value.screenHeightPx}"
             )
+        }
+
+        _gameState.update {
+            it.copy(
+                localPlayer = localPlayer.toUiState(),
+                opponents = clientPlayerStates.values.map { it.toUiState() })
         }
     }
 
@@ -400,8 +412,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         gameLoopJob = viewModelScope.launch {
-            _uiState.update { it.copy(isRunning = true) }
-            while (_uiState.value.isRunning) {
+            _gameState.update { it.copy(isRunning = true) }
+            while (_gameState.value.isRunning) {
                 delay(GameConstants.GAME_TICK_RATE_MS)
                 updateGame(screenWidthPx, screenHeightPx)
             }
@@ -411,73 +423,72 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopGameLoop() {
         gameLoopJob?.cancel()
         gameLoopJob = null
-        if (_uiState.value.isRunning) {
-            _uiState.update { it.copy(isRunning = false) }
+        if (_gameState.value.isRunning) {
+            _gameState.update { it.copy(isRunning = false) }
         }
     }
 
     // This is the core game logic, only run on the host
     private fun updateGame(screenWidthPx: Float, screenHeightPx: Float) {
-        if (!hostPlayerState.isAlive && !clientPlayerState.isAlive) {
-            // Both crashed, game is over.
+        val alivePlayers =
+            clientPlayerStates.values.toList().plus(localPlayer).filter { it.isAlive }.size
+
+        if ((isMultiplayer() && alivePlayers <= 1) || (!isMultiplayer() && alivePlayers == 0)) {
             stopGameLoop()
-            handleRoundEnd(crashedByLocal = true, crashedByOpponent = true)
+            handleRoundEnd()
             return
         }
 
         // Update Host's player state
-        if (hostPlayerState.isAlive) {
-            updatePlayerState(hostPlayerState)
+        if (localPlayer.isAlive) {
+            updatePlayerState(localPlayer)
         }
 
         // Update Client's player state (on host, apply client's received input)
-        if (_uiState.value.multiplayerState.isMultiplayer && clientPlayerState.isAlive) {
-            updatePlayerState(
-                clientPlayerState
-            ) // Client's input already applied by handler
+        if (_gameState.value.multiplayerState.isMultiplayer) {
+            clientPlayerStates.forEach { if (it.value.isAlive) updatePlayerState(it.value) }
         }
 
         // Check for collisions AFTER all players have moved
         // Host collision check for self
-        if (hostPlayerState.isAlive && checkForCollisions(
-                hostPlayerState.trail.last().position,
-                hostPlayerState,
-                clientPlayerState,
-                screenWidthPx,
-                screenHeightPx
+        if (localPlayer.isAlive && checkForCollisions(
+                localPlayer, clientPlayerStates.values, screenWidthPx, screenHeightPx
             )
         ) {
-            hostPlayerState.isAlive = false
-            handleCrash(crashedHost = true, crashedClient = false)
-            return // Game over, stop further processing
+            localPlayer.isAlive = false
+            distributePoints()
         }
 
         // Host collision check for client
-        if (_uiState.value.multiplayerState.isMultiplayer && clientPlayerState.isAlive && checkForCollisions(
-                clientPlayerState.trail.last().position,
-                clientPlayerState,
-                hostPlayerState,
-                screenWidthPx,
-                screenHeightPx
-            )
-        ) {
-            clientPlayerState.isAlive = false
-            handleCrash(crashedHost = false, crashedClient = true)
-            return // Game over, stop further processing
+        if (_gameState.value.multiplayerState.isMultiplayer) {
+            for ((key, value) in clientPlayerStates) {
+                var otherPlayers = clientPlayerStates.filterKeys { it != key }.values
+                otherPlayers = otherPlayers.plus(localPlayer)
+
+                if (value.isAlive && checkForCollisions(
+                        value, otherPlayers, screenWidthPx, screenHeightPx
+                    )
+                ) {
+                    value.isAlive = false
+                    distributePoints()
+                }
+            }
         }
 
-        // Host sends full game state to client
-        if (_uiState.value.multiplayerState.isMultiplayer && connectedEndpointId != null) {
-            val gameStateString = serializeGameState(hostPlayerState, clientPlayerState)
-            nearbyConnectionsManager.sendGameData("game_state_sync:$gameStateString")
+        if (_gameState.value.multiplayerState.isMultiplayer) {
+            val gameStateString = serializeGameState()
+            for (clientPlayer in clientPlayerStates) {
+                nearbyConnectionsManager.sendGameDataToEndpoint(
+                    clientPlayer.key, "player_state_update:${clientPlayer.key}:$gameStateString"
+                )
+            }
         }
 
         // Update UI based on roles
-        _uiState.update {
+        _gameState.update {
             it.copy(
-                localPlayer = if (isHost()) hostPlayerState.toUiState(true) else clientPlayerState.toUiState(false),
-                opponentPlayer = if (isHost()) clientPlayerState.toUiState(false) else hostPlayerState.toUiState(true)
-            )
+                localPlayer = localPlayer.toUiState(),
+                opponents = clientPlayerStates.values.map { it.toUiState() })
         }
     }
 
@@ -486,7 +497,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Update direction and position
         player.direction += player.turning * GameConstants.TURN_SPEED
         val speed =
-            if (player.boostState == BoostState.BOOSTING) GameConstants.BOOSTED_SPEED else if (player.boostState == BoostState.BRAKING) GameConstants.BRAKING_SPEED else GameConstants.NORMAL_SPEED
+            if (player.boostState == SpecialMoveState.BOOST) GameConstants.BOOST_SPEED else if (player.boostState == SpecialMoveState.SLOW) GameConstants.SLOW_SPEED else GameConstants.NORMAL_SPEED
         val nextPos = calculateNextPosition(player.trail.last().position, player.direction, speed)
 
         // Update gap logic
@@ -499,17 +510,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             player.gapCounter = 0
         }
 
-        if (player.boostState == BoostState.BOOSTING || player.boostState == BoostState.BRAKING) {
+        if (player.boostState == SpecialMoveState.BOOST || player.boostState == SpecialMoveState.SLOW) {
             player.boostFrames++
-            if (player.boostFrames >= GameConstants.BOOST_DURATION_FRAMES) {
-                player.boostState = BoostState.COOLDOWN
+            if (player.boostFrames >= GameConstants.SPECIAL_MOVE_DURATION_FRAMES) {
+                player.boostState = SpecialMoveState.COOLDOWN
                 player.boostFrames = 0
-                player.boostCooldownFrames = GameConstants.BOOST_COOLDOWN_DURATION_FRAMES
+                player.boostCooldownFrames = GameConstants.SPECIAL_MOVE_COOLDOWN_DURATION_FRAMES
             }
-        } else if (player.boostState == BoostState.COOLDOWN) {
+        } else if (player.boostState == SpecialMoveState.COOLDOWN) {
             player.boostCooldownFrames--
             if (player.boostCooldownFrames <= 0) {
-                player.boostState = BoostState.READY
+                player.boostState = SpecialMoveState.READY
             }
         }
 
@@ -519,9 +530,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // Collision detection now considers both players' trails
     private fun checkForCollisions(
-        pos: Offset, selfPlayer: PlayerState, otherPlayer: PlayerState, width: Float, height: Float
+        selfPlayer: PlayerState, otherPlayers: Collection<PlayerState>, width: Float, height: Float
     ): Boolean {
         val radius = GameConstants.STROKE_WIDTH * GameConstants.COLLISION_RADIUS_MULTIPLIER
+        val pos = selfPlayer.trail.last().position
 
         // Boundary collision
         if (pos.x < 0 || pos.x > width || pos.y < 0 || pos.y > height) return true
@@ -540,15 +552,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // Opponent collision (if multiplayer)
-        if (_uiState.value.multiplayerState.isMultiplayer) {
-            val opponentTrail = otherPlayer.trail
-            if (opponentTrail.size > 1) {
-                for (i in 0 until opponentTrail.size - 1) {
-                    if (!opponentTrail[i].isGap && !opponentTrail[i + 1].isGap && distanceFromPointToSegment(
-                            pos, opponentTrail[i].position, opponentTrail[i + 1].position
-                        ) < radius
-                    ) {
-                        return true
+        if (_gameState.value.multiplayerState.isMultiplayer) {
+            for (otherPlayer in otherPlayers) {
+                val opponentTrail = otherPlayer.trail
+                if (opponentTrail.size > 1) {
+                    for (i in 0 until opponentTrail.size - 1) {
+                        if (!opponentTrail[i].isGap && !opponentTrail[i + 1].isGap && distanceFromPointToSegment(
+                                pos, opponentTrail[i].position, opponentTrail[i + 1].position
+                            ) < radius
+                        ) {
+                            return true
+                        }
                     }
                 }
             }
@@ -556,354 +570,310 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         return false
     }
 
-    // Host calls this when a crash occurs
-    private fun handleCrash(crashedHost: Boolean, crashedClient: Boolean) {
-        stopGameLoop()
-        if (crashedHost) hostPlayerState.isAlive = false
-        if (crashedClient) clientPlayerState.isAlive = false
-
-        // On the host, "local" player is the host, "opponent" is the client.
-        handleRoundEnd(crashedByLocal = crashedHost, crashedByOpponent = crashedClient)
+    private fun distributePoints() {
+        clientPlayerStates.values.forEach { if (it.isAlive) it.score++ }
+        if (localPlayer.isAlive) localPlayer.score++
     }
 
-
-    private fun handleGameDataReceived(message: String) {
-
+    private fun handleGameDataReceived(endpointId: String, message: String) {
         val parts =
             message.split(":", limit = 2) // Limit to 2 parts to keep full data string if present
         val type = parts[0]
         val data = parts.getOrNull(1)
 
         when (type) {
-            // Client receives full game state from host
-            "game_state_sync" -> if (!isHost() && data != null) handleGameStateSync(data)
-            // Host receives client input
-            "client_input" -> if (isHost() && data != null) handleClientInput(data)
-            // Host receives request to change game running status
-            "request_game_running_status" -> if (isHost() && data != null) {
-                val requestedStatus = data.toBoolean()
-                _uiState.update { it.copy(isRunning = requestedStatus) }
-                if (requestedStatus) {
-                    startGameLoop(
-                        _uiState.value.screenWidthPx, _uiState.value.screenHeightPx
-                    ) // Host starts its loop
-                } else {
-                    stopGameLoop()
-                }
-                nearbyConnectionsManager.sendGameData("game_running_status:$requestedStatus")
-            }
-            // Client receives game running status from host
+            "player_state_full_sync" -> if (!isHost() && data != null) handlePlayerStateFullSync(
+                data
+            )
+
+            "player_state_update" -> if (!isHost() && data != null) handlePlayerStateUpdate(data)
+            "client_input" -> if (isHost() && data != null) handleClientInput(endpointId, data)
             "game_running_status" -> if (!isHost() && data != null) handleGameRunningStatus(data.toBoolean())
-            // Host receives request to reset game
-            "request_reset_game" -> if (isHost()) {
-                resetGameRound()
-            }
-            "reset_round" -> if (!isHost()) {
-                // Client resets for new round only
-                resetGameForNewRound()
-            }
-            "reset_match" -> if (!isHost()) {
-                // Client does full reset for new match
-                resetGame()
-            }
+            "reset_round" -> if (!isHost()) resetGameForNewRound()
+            "reset_match" -> if (!isHost()) resetGame()
             "round_over" -> if (!isHost() && data != null) handleRemoteRoundOver(data)
-            "match_over" -> if (!isHost() && data != null) handleRemoteMatchOver(data)
-            "set_score_to_win" -> if (!isHost() && data != null) {
-                _uiState.update { it.copy(scoreToWin = data.toInt()) }
+            "set_score_to_win" -> if (!isHost() && data != null) _gameState.update {
+                it.copy(
+                    scoreToWin = data.toInt()
+                )
             }
+
+            "screen_dimensions" -> if (!isHost() && data != null) {
+                val (width, height) = data.split(",")
+                _gameState.update {
+                    it.copy(
+                        screenWidthPx = width.toFloat(), screenHeightPx = height.toFloat()
+                    )
+                }
+            }
+
+            "match_state" -> if (!isHost() && data != null) handleMatchState(data)
         }
     }
-
-
 
     // Client-side function to reset for a new round without touching scores
     private fun resetGameForNewRound() {
         stopGameLoop()
 
-        // Keep the scores when resetting for new round
-        val localScore = clientPlayerState.score
-        val opponentScore = hostPlayerState.score
+        localPlayer.resetForNewRound()
+        clientPlayerStates.forEach { it.value.resetForNewRound() }
 
-        hostPlayerState.resetForNewRound()
-        clientPlayerState.resetForNewRound()
-
-        // Restore scores
-        clientPlayerState.score = localScore
-        hostPlayerState.score = opponentScore
-
-        _uiState.update {
+        _gameState.update {
             it.copy(
-                localPlayer = PlayerUiState(score = localScore),
-                opponentPlayer = PlayerUiState(score = opponentScore),
-                isRunning = true, // Auto-start the game
-                isGameOver = false,
-                gameOverMessage = ""
+                localPlayer = localPlayer.toUiState(),
+                opponents = clientPlayerStates.values.map { it.toUiState() },
             )
         }
-        initializeGamePositions(_uiState.value.screenWidthPx, _uiState.value.screenHeightPx)
+        initializeGamePositions(_gameState.value.screenWidthPx, _gameState.value.screenHeightPx)
     }
 
     // Host to client: full game state sync - added score
-    private fun serializeGameState(hostState: PlayerState, clientState: PlayerState): String {
-        val hostData =
-            "${hostState.trail.lastOrNull()?.position?.x ?: 0f}," + "${hostState.trail.lastOrNull()?.position?.y ?: 0f}," + "${hostState.direction},${hostState.isDrawing},${hostState.isAlive},${hostState.boostState.ordinal}," + "${hostState.boostCooldownFrames}," + "${hostState.score}"
+    private fun serializeFullState(): String {
+        val playerStates = clientPlayerStates.values.toList().plus(localPlayer)
 
-        val clientData =
-            "${clientState.trail.lastOrNull()?.position?.x ?: 0f}," + "${clientState.trail.lastOrNull()?.position?.y ?: 0f}," + "${clientState.direction},${clientState.isDrawing},${clientState.isAlive},${clientState.boostState.ordinal}," + "${clientState.boostCooldownFrames}," + "${clientState.score}"
-        return "$hostData;$clientData"
+        val json = playerStates.map { Json.encodeToString(it) }
+
+        return json.joinToString(";")
     }
 
-    private fun handleGameStateSync(data: String) {
-        if (isHost()) return // Host doesn't process incoming game state syncs
+    private fun serializeGameState(): String {
+        val playerStates = clientPlayerStates.values.toList().plus(localPlayer)
 
-        try {
-            val playerStates = data.split(";")
-            val hostData = playerStates[0].split(",")
-            val clientData = playerStates[1].split(",")
+        val latestPlayerStates = playerStates.map {
+            LatestPlayerState(
+                it.id, it.trail.last(), it.score, it.isAlive, it.boostState
+            )
+        }
 
-            // Update hostPlayerState (which is the opponent from client's perspective)
-            val newHostPos = Offset(hostData[0].toFloat(), hostData[1].toFloat())
-            if (hostPlayerState.trail.isEmpty() || (newHostPos - hostPlayerState.trail.last().position).getDistance() > 1f) {
-                hostPlayerState.trail.add(
-                    TrailSegment(
-                        newHostPos, isGap = !hostData[3].toBoolean()
-                    )
-                )
-            }
-            hostPlayerState.direction = hostData[2].toFloat()
-            clientPlayerState.isDrawing = clientData[3].toBoolean()
-            hostPlayerState.isAlive = hostData[4].toBoolean()
-            hostPlayerState.boostState = BoostState.entries.toTypedArray()[hostData[5].toInt()]
-            hostPlayerState.boostCooldownFrames = hostData[6].toInt()
-            hostPlayerState.score = hostData[7].toInt()
+        val json = latestPlayerStates.map { Json.encodeToString(it) }
 
-            // Update clientPlayerState (which is local from client's perspective)
-            val newClientPos = Offset(clientData[0].toFloat(), clientData[1].toFloat())
-            if (clientPlayerState.trail.isEmpty() || (newClientPos - clientPlayerState.trail.last().position).getDistance() > 1f) {
-                clientPlayerState.trail.add(
-                    TrailSegment(
-                        newClientPos, isGap = !clientData[3].toBoolean()
-                    )
-                )
-            }
-            clientPlayerState.direction = clientData[2].toFloat()
-            clientPlayerState.isDrawing = clientData[3].toBoolean()
-            clientPlayerState.isAlive = clientData[4].toBoolean()
-            clientPlayerState.boostState = BoostState.entries.toTypedArray()[clientData[5].toInt()]
-            clientPlayerState.boostCooldownFrames = clientData[6].toInt()
-            clientPlayerState.score = clientData[7].toInt()
+        return json.joinToString(";")
+    }
 
-            _uiState.update {
-                it.copy(
-                    localPlayer = clientPlayerState.toUiState(false), // Client's perspective
-                    opponentPlayer = hostPlayerState.toUiState(true), // Client's perspective
-                    isGameOver = !hostPlayerState.isAlive || !clientPlayerState.isAlive
-                )
-            }
-        } catch (e: Exception) {
-            println("Error parsing game_state_sync data: ${e.message}")
+    private fun handlePlayerStateFullSync(data: String) {
+        val parts = data.split(":", limit = 2)
+        val localPlayerId = parts[0]
+        val players = parts[(1)]
+
+        var playerStates: List<PlayerState> = players.split(";").map { Json.decodeFromString(it) }
+        playerStates = playerStates.toMutableList()
+
+        val index = playerStates.indexOfFirst { it.id == localPlayerId }
+
+        val localPlayer = playerStates.removeAt(index)
+
+        _gameState.update {
+            it.copy(
+                localPlayer = localPlayer, opponents = playerStates
+            )
         }
     }
 
+    private fun handlePlayerStateUpdate(data: String) {
+        val parts = data.split(":", limit = 2)
+        val localPlayerId = parts[0]
+        val players = parts[1]
+
+        val playerStates: List<LatestPlayerState> =
+            players.split(";").map { Json.decodeFromString<LatestPlayerState>(it) }
+
+        val localPlayerState = playerStates.first { it.id == localPlayerId }
+        val opponentStates = playerStates.filter { it.id != localPlayerId }
+
+        _gameState.update { current ->
+            // Build new local player instance
+            val updatedLocalPlayer = current.localPlayer.copy(
+                trail = (current.localPlayer.trail + localPlayerState.pos).toMutableList(),
+                score = localPlayerState.score,
+                isAlive = localPlayerState.isAlive,
+                boostState = localPlayerState.boostState
+            )
+
+            // Build new opponents list
+            val updatedOpponents = current.opponents.map { opponent ->
+                val state = opponentStates.find { it.id == opponent.id }
+                if (state != null) {
+                    opponent.copy(
+                        trail = (opponent.trail + state.pos).toMutableList(),
+                        score = state.score,
+                        isAlive = state.isAlive,
+                        boostState = state.boostState
+                    )
+                } else {
+                    opponent
+                }
+            }
+
+            current.copy(
+                localPlayer = updatedLocalPlayer,
+                opponents = updatedOpponents,
+                isRunning = current.isRunning
+            )
+        }
+    }
+
+
     // Client to host: player input
-    private fun handleClientInput(data: String) {
+    private fun handleClientInput(endpointId: String, data: String) {
         val parts = data.split(":")
+        val playerState = clientPlayerStates[endpointId]
+        if (playerState == null) return
         when (parts[0]) {
-            "turning" -> clientPlayerState.turning = parts[1].toFloat()
+            "turning" -> playerState.turning = parts[1].toFloat()
             "boost" -> {
-                if (clientPlayerState.isAlive && clientPlayerState.boostState == BoostState.READY) {
-                    clientPlayerState.boostState = BoostState.valueOf(parts[1])
-                    clientPlayerState.boostFrames = 0
+                if (playerState.isAlive && playerState.boostState == SpecialMoveState.READY) {
+                    playerState.boostState = SpecialMoveState.valueOf(parts[1])
+                    playerState.boostFrames = 0
                 }
             }
         }
     }
 
     private fun handleGameRunningStatus(receivedIsRunning: Boolean) {
-        _uiState.update { it.copy(isRunning = receivedIsRunning) }
+        _gameState.update { it.copy(isRunning = receivedIsRunning) }
     }
 
     // Client receives round over status from host
     private fun handleRemoteRoundOver(data: String) {
-        val parts = data.split(":", limit = 3)
-        hostPlayerState.score = parts[0].toInt()
-        clientPlayerState.score = parts[1].toInt()
-        val message = parts[2]
+//        val parts = data.split(":", limit = 3)
+//        hostPlayerState.score = parts[0].toInt()
+//        clientPlayerState.score = parts[1].toInt()
+//        val message = parts[2]
 
-        handleRoundEnd(crashedByLocal = !clientPlayerState.isAlive, crashedByOpponent = !hostPlayerState.isAlive)
+        handleRoundEnd()
     }
 
     // Client receives match over status from host
-    private fun handleRemoteMatchOver(data: String) {
-        val parts = data.split(":", limit = 3)
-        hostPlayerState.score = parts[0].toInt()
-        clientPlayerState.score = parts[1].toInt()
-        val message = parts[2]
-
-        _uiState.update {
+    private fun handleMatchState(data: String) {
+        _gameState.update {
             it.copy(
-                isGameOver = true,
-                isMatchOver = true,
-                gameOverMessage = message,
-                localPlayer = clientPlayerState.toUiState(false),
-                opponentPlayer = hostPlayerState.toUiState(true)
+                matchState = MatchState.valueOf(data)
             )
         }
     }
 
-    private fun handleRoundEnd(crashedByLocal: Boolean, crashedByOpponent: Boolean) {
+    private fun handleRoundEnd() {
         stopGameLoop()
 
         if (isHost()) {
-            if (!crashedByLocal && crashedByOpponent) {
-                hostPlayerState.score++
-            } else if (crashedByLocal && !crashedByOpponent && isMultiplayer()) {
-                clientPlayerState.score++
-            }
-            // If both crash or in single player you crash, no points awarded.
-
-            val scoreToWin = _uiState.value.scoreToWin
-            if (isMultiplayer() && (hostPlayerState.score >= scoreToWin || clientPlayerState.score >= scoreToWin)) {
+            val scoreToWin = _gameState.value.scoreToWin
+            if (isMultiplayer() && (localPlayer.score >= scoreToWin || clientPlayerStates.values.any { it.score >= scoreToWin })) {
                 handleMatchOver()
                 return
             }
         }
 
-        val isSinglePlayer = !_uiState.value.multiplayerState.isMultiplayer
+        val isSinglePlayer = !_gameState.value.multiplayerState.isMultiplayer
         val message = when {
             isSinglePlayer -> "You crashed! Tap New Game to try again."
-            crashedByLocal && crashedByOpponent -> "Draw! Both crashed!"
-            crashedByLocal -> "You Lose! Opponent gets a point."
-            crashedByOpponent -> "You Win! You get a point."
             else -> "Round Over!"
         }
 
         if (isHost() && isMultiplayer()) {
-            nearbyConnectionsManager.sendGameData("round_over:${hostPlayerState.score}:${clientPlayerState.score}:$message")
+            nearbyConnectionsManager.sendGameData("round_over:$message")
         }
 
-        _uiState.update {
+        _gameState.update {
             it.copy(
-                isGameOver = true,
-                gameOverMessage = message,
-                localPlayer = if (isHost()) hostPlayerState.toUiState(true) else clientPlayerState.toUiState(false),
-                opponentPlayer = if (isHost()) clientPlayerState.toUiState(false) else hostPlayerState.toUiState(true)
+                matchState = MatchState.ROUND_OVER
+//                isRoundOver = true,
+//                gameOverMessage = message,
+//                localPlayer = if (isHost()) localPlayer.toUiState(true) else clientPlayerState.toUiState(false),
+//                opponentPlayer = if (isHost()) clientPlayerState.toUiState(false) else localPlayer.toUiState(true)
             )
         }
     }
 
     private fun handleMatchOver() {
-        // This is only ever called on the host.
-        val hostWins = hostPlayerState.score > clientPlayerState.score
-
-        val finalMessageForHost = if (hostWins) "You Win the Match!" else "You Lose the Match!"
-        val finalMessageForClient = if (hostWins) "You Lose the Match!" else "You Win the Match!"
 
         // Update host UI immediately
-        _uiState.update {
+        _gameState.update {
             it.copy(
-                isGameOver = true,
-                isMatchOver = true,
-                gameOverMessage = finalMessageForHost,
-                localPlayer = hostPlayerState.toUiState(true),
-                opponentPlayer = clientPlayerState.toUiState(false)
+                matchState = MatchState.GAME_OVER
             )
         }
 
         // Inform the client about the final game over with their specific message
-        nearbyConnectionsManager.sendGameData("match_over:${hostPlayerState.score}:${clientPlayerState.score}:$finalMessageForClient")
+        nearbyConnectionsManager.sendGameData("match_over")
     }
 
-
-
-
-    fun hideScoreSetup() {
-        _uiState.update { it.copy(showScoreSetup = false) }
+    fun sendMatchState() {
+        nearbyConnectionsManager.sendGameData("match_state:${gameState.value.matchState}")
     }
 
     fun hideGameOver() {
-        _uiState.update { it.copy(showGameOver = false) }
+        _gameState.update { it.copy() }
     }
 
     fun onScoreSetupStartGame() {
-        if (_uiState.value.isMatchOver) {
-            startNewMatch()
-        } else {
-            initializeGamePositions(_uiState.value.screenWidthPx, _uiState.value.screenHeightPx)
-            toggleGameRunning()
-        }
-        hideScoreSetup()
+        startNewMatch()
+
+//        if (_gameState.value.matchState == MatchState.GAME_OVER) {
+//            startNewMatch()
+//        } else {
+//            initializeGamePositions(_gameState.value.screenWidthPx, _gameState.value.screenHeightPx)
+//            toggleGameRunning()
+//        }
+//        hideScoreSetup()
     }
 
     fun onGameOverNewGame() {
-        if (_uiState.value.isMatchOver) {
-            _uiState.update {
+        if (_gameState.value.matchState == MatchState.GAME_OVER) {
+            _gameState.update {
                 it.copy(
-                    isGameOver = false,
-                    gameOverMessage = ""
+                    matchState = MatchState.MATCH_SETTINGS
                 )
             }
         } else {
             // For regular round over, proceed as normal
             resetGameRound()
-            initializeGamePositions(_uiState.value.screenWidthPx, _uiState.value.screenHeightPx)
+            initializeGamePositions(_gameState.value.screenWidthPx, _gameState.value.screenHeightPx)
             hideGameOver()
         }
     }
 
     fun incrementScoreToWin() {
-        setScoreToWin(_uiState.value.scoreToWin + 1)
+        setScoreToWin(_gameState.value.scoreToWin + 1)
     }
 
     fun decrementScoreToWin() {
-        setScoreToWin((_uiState.value.scoreToWin - 1).coerceAtLeast(1))
+        setScoreToWin((_gameState.value.scoreToWin - 1).coerceAtLeast(1))
     }
 
-    val shouldShowScoreSetup: StateFlow<Boolean> = uiState
-        .map { state ->
-            val showBefore = state.multiplayerState.isHost &&
-                    !state.isRunning &&
-                    !state.isGameOver &&
-                    state.localPlayer.score == 0 &&
-                    state.opponentPlayer.score == 0
-
-            val showAfter = state.multiplayerState.isHost &&
-                    state.isMatchOver &&
-                    !state.isRunning &&
-                    !state.isGameOver
-
-            showBefore || showAfter
-        }
-        .onEach { shouldShow: Boolean ->
-            if (shouldShow) updateScoreSetupText()
-        }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+//    val shouldShowScoreSetup: StateFlow<Boolean> = gameState.map { state ->
+//        val showBefore =
+//            state.multiplayerState.isHost && !state.isRunning && !state.isRoundOver && state.localPlayer.score == 0 && state.opponents.all { it.score == 0 }
+//
+//        val showAfter =
+//            state.multiplayerState.isHost && state.isMatchOver && !state.isRunning && !state.isRoundOver
+//
+//        showBefore || showAfter
+//    }.onEach { shouldShow: Boolean ->
+//        if (shouldShow) updateScoreSetupText()
+//    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
 
-    val shouldShowGameOver: StateFlow<Boolean> = uiState
-        .map { state ->
-            state.isGameOver &&
-                    (state.multiplayerState.isHost || !state.multiplayerState.isMultiplayer)
-        }
-        .onEach { shouldShow: Boolean ->
-            if (shouldShow) updateGameOverTitle()
-        }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+//    val shouldShowGameOver: StateFlow<Boolean> = gameState.map { state ->
+//        state.isRoundOver //&& (state.multiplayerState.isHost || !state.multiplayerState.isMultiplayer)
+//    }.onEach { shouldShow: Boolean ->
+//        if (shouldShow) updateGameOverTitle()
+//    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    private fun updateGameOverTitle() {
-        val title = if (_uiState.value.isMatchOver) "Match Over!" else "Round Over!"
-        _uiState.update {
-            it.copy(gameOverTitle = title)
-        }
-    }
+//    private fun updateGameOverTitle() {
+//        val title = if (_gameState.value.isMatchOver) "Match Over!" else "Round Over!"
+//        _gameState.update {
+//            it.copy(gameOverTitle = title)
+//        }
+//    }
 
-    private fun updateScoreSetupText() {
-        val title = if (_uiState.value.isMatchOver) "Match Complete! New Game Setup" else "Game Setup"
-        val message = "First to win:"
-        _uiState.update {
-            it.copy(scoreSetupTitle = title, scoreSetupMessage = message)
-        }
-    }
+//    private fun updateScoreSetupText() {
+//        val title =
+//            if (_gameState.value.isMatchOver) "Match Complete! New Game Setup" else "Game Setup"
+//        val message = "First to win:"
+//        _gameState.update {
+//            it.copy(scoreSetupTitle = title, scoreSetupMessage = message)
+//        }
+//    }
 
 
     override fun onCleared() {
@@ -912,9 +882,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         stopGameLoop()
     }
 }
-
-
-
 
 
 // --- Helper Extensions ---
@@ -928,27 +895,13 @@ private fun PlayerState.resetForNewRound() {
     turning = 0f
     isDrawing = true
     gapCounter = 0
-    boostState = BoostState.READY
+    boostState = SpecialMoveState.READY
     boostFrames = 0
     boostCooldownFrames = 0
     isAlive = true
     direction = 0f
 }
 
-private fun PlayerState.toUiState(isHost: Boolean): PlayerUiState {
-    val color = when {
-        !this.isAlive -> Color.Gray
-        this.boostState == BoostState.BOOSTING -> Color.Magenta
-        this.boostState == BoostState.BRAKING -> Color.Magenta
-        isHost -> Color.Blue
-        else -> Color.Red
-    }
-    return PlayerUiState(
-        trail = this.trail.toList(),
-        isAlive = this.isAlive,
-        boostState = this.boostState,
-        boostCooldownFrames = this.boostCooldownFrames,
-        color = color,
-        score = this.score
-    )
+private fun PlayerState.toUiState(): PlayerState {
+    return this.copy()
 }
