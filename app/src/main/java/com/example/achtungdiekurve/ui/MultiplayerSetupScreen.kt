@@ -93,7 +93,7 @@ fun MultiplayerSetupScreen(
             }
 
             Button(
-                onClick = { gameViewModel.startHostingGame(nickname) },
+                onClick = { gameViewModel.startHostingGame(nickname.ifEmpty { "Host" }) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp)

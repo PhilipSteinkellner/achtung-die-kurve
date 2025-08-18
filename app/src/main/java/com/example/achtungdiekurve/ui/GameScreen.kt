@@ -51,7 +51,8 @@ import com.example.achtungdiekurve.data.SpecialMoveState
 import com.example.achtungdiekurve.game.GameViewModel
 import com.example.achtungdiekurve.game.rememberAccelerometerSensorHandler
 import com.example.achtungdiekurve.settings.SettingsViewModel
-import kotlin.math.roundToInt
+import kotlin.math.ceil
+import kotlin.math.min
 
 @Composable
 fun CurveGameScreen(
@@ -77,8 +78,6 @@ fun CurveGameScreen(
 
             if (currentScreenWidthPx > 0 && currentScreenHeightPx > 0) {
                 gameViewModel.initializeGamePositions(
-                    currentScreenWidthPx - GameConstants.WALL_MARGIN,
-                    currentScreenHeightPx - GameConstants.WALL_MARGIN
                 )
             }
         }
@@ -144,17 +143,24 @@ fun CurveGameScreen(
                 color = Color.Black, size = size
             )
 
+            val scale = min(
+                size.width / GameConstants.GAME_WORLD_WIDTH,
+                size.height / GameConstants.GAME_WORLD_HEIGHT
+            )
+
+            val offset = Offset(
+                (size.width - GameConstants.GAME_WORLD_WIDTH * scale) / 2f,
+                (size.height - GameConstants.GAME_WORLD_HEIGHT * scale) / 2f
+            )
+
             // White inner area
             drawRect(
-                color = Color.White, topLeft = Offset(
-                    (size.width - gameState.screenWidthPx) / 2f,
-                    (size.height - gameState.screenHeightPx) / 2f
-                ), size = Size(
-                    gameState.screenWidthPx, gameState.screenHeightPx
+                color = Color.White, topLeft = offset, size = Size(
+                    GameConstants.GAME_WORLD_WIDTH * scale, GameConstants.GAME_WORLD_HEIGHT * scale
                 )
             )
-            drawPlayerTrail(gameState.localPlayer)
-            gameState.opponents.forEach { drawPlayerTrail(it) }
+            drawPlayerTrail(gameState.localPlayer, offset, scale)
+            gameState.opponents.forEach { drawPlayerTrail(it, offset, scale) }
         }
 
         Row(
@@ -207,7 +213,7 @@ fun CurveGameScreen(
 
 
         // Boost Status
-        if (gameState.localPlayer.isAlive) {
+        if (gameState.localPlayer.isAlive && gameState.matchState == MatchState.RUNNING) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -217,9 +223,9 @@ fun CurveGameScreen(
             ) {
                 val (text, color) = when (gameState.localPlayer.boostState) {
                     SpecialMoveState.READY -> "Special Move Ready! (Swipe Up/Down)" to Color.Green
-                    SpecialMoveState.BOOST -> "Boost Mode..." to Color.Magenta
-                    SpecialMoveState.SLOW -> "Slow Mode..." to Color.Magenta
-                    SpecialMoveState.COOLDOWN -> "Cooldown ${gameState.localPlayer.boostCooldownFrames / (1000f / GameConstants.GAME_TICK_RATE_MS).roundToInt()}s" to Color.Black
+                    SpecialMoveState.BOOST -> "Boost Mode" to Color.Magenta
+                    SpecialMoveState.SLOW -> "Slow Mode" to Color.Magenta
+                    SpecialMoveState.COOLDOWN -> "Cooldown ${(ceil(gameState.localPlayer.boostCooldownFrames / (100f / GameConstants.GAME_TICK_RATE_MS)) / 10)}s" to Color.Red
                 }
 
                 Text(
@@ -242,7 +248,7 @@ fun CurveGameScreen(
 }
 
 
-private fun DrawScope.drawPlayerTrail(playerState: PlayerState) {
+private fun DrawScope.drawPlayerTrail(playerState: PlayerState, offset: Offset, scale: Float) {
     for (i in 1 until playerState.trail.size) {
         val start = playerState.trail[i - 1]
         val end = playerState.trail[i]
@@ -255,10 +261,11 @@ private fun DrawScope.drawPlayerTrail(playerState: PlayerState) {
             }
 
             drawLine(
-                color = color,
-                start = start.position,
-                end = end.position,
-                strokeWidth = GameConstants.STROKE_WIDTH
+                color = color, start = Offset(
+                    x = start.position.x * scale + offset.x, y = start.position.y * scale + offset.y
+                ), end = Offset(
+                    x = end.position.x * scale + offset.x, y = end.position.y * scale + offset.y
+                ), strokeWidth = GameConstants.STROKE_WIDTH.toPx()
             )
         }
     }
@@ -383,110 +390,109 @@ fun ScoreCard(
     gameState: GameState,
     nickname: String,
 ) {
-    if (!gameState.isRunning) {
-        Column(
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp, 50.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Bottom
+    ) {
+        // Score Card
+        Card(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(20.dp, 50.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Bottom
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .shadow(8.dp, RoundedCornerShape(16.dp))
+                .border(2.dp, Color.Black.copy(alpha = 0.1f), RoundedCornerShape(16.dp)),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
-            // Score Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp)
-                    .shadow(8.dp, RoundedCornerShape(16.dp))
-                    .border(2.dp, Color.Black.copy(alpha = 0.1f), RoundedCornerShape(16.dp)),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            Column(
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                    // Local Player Score
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Local Player Score
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .background(gameState.localPlayer.color, CircleShape)
+                                .border(2.dp, Color.Black.copy(alpha = 0.2f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "${gameState.localPlayer.score}",
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        Text(
+                            text = nickname.ifEmpty { "You" },
+                            fontSize = 12.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+
+                    for (player in gameState.opponents) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(48.dp)
-                                    .background(gameState.localPlayer.color, CircleShape)
-                                    .border(2.dp, Color.Black.copy(alpha = 0.2f), CircleShape),
-                                contentAlignment = Alignment.Center
+                                    .background(player.color, CircleShape)
+                                    .border(
+                                        2.dp, Color.Black.copy(alpha = 0.2f), CircleShape
+                                    ), contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "${gameState.localPlayer.score}",
+                                    text = "${player.score}",
                                     fontSize = 24.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
                             }
                             Text(
-                                text = nickname.ifEmpty { "You" },
+                                text = player.name,
                                 fontSize = 12.sp,
                                 color = Color.Gray,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
 
-                        for (player in gameState.opponents) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .background(player.color, CircleShape)
-                                        .border(
-                                            2.dp, Color.Black.copy(alpha = 0.2f), CircleShape
-                                        ), contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "${player.score}",
-                                        fontSize = 24.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                }
-                                Text(
-                                    text = player.name,
-                                    fontSize = 12.sp,
-                                    color = Color.Gray,
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
-                            }
-
-                        }
                     }
+                }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                    // First to X wins text
-                    if (gameState.multiplayerState.isMultiplayer) Box(
-                        modifier = Modifier
-                            .background(
-                                Color.Gray.copy(alpha = 0.1f), RoundedCornerShape(8.dp)
-                            )
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "First to ${gameState.scoreToWin} points!",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color.DarkGray
+                // First to X wins text
+                if (gameState.multiplayerState.isMultiplayer) Box(
+                    modifier = Modifier
+                        .background(
+                            Color.Gray.copy(alpha = 0.1f), RoundedCornerShape(8.dp)
                         )
-                    }
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "First to ${gameState.scoreToWin} points!",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.DarkGray
+                    )
                 }
             }
         }
     }
 }
+
 

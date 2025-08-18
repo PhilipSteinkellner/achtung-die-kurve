@@ -37,8 +37,6 @@ data class GameState(
     val opponents: List<PlayerState> = listOf(),
     val multiplayerState: MultiplayerState = MultiplayerState(),
     val isRunning: Boolean = false,
-    val screenWidthPx: Float = 0f,
-    val screenHeightPx: Float = 0f,
     val scoreToWin: Int = 5,
     val matchState: MatchState = MatchState.SETUP
 )
@@ -51,9 +49,9 @@ data class PlayerState(
     var turning: Float = 0f,
     var isDrawing: Boolean = true,
     var gapCounter: Int = 0,
-    var boostState: SpecialMoveState = SpecialMoveState.READY,
+    var boostState: SpecialMoveState = SpecialMoveState.COOLDOWN,
     var boostFrames: Int = 0,
-    var boostCooldownFrames: Int = 0,
+    var boostCooldownFrames: Int = GameConstants.SPECIAL_MOVE_COOLDOWN_DURATION_FRAMES,
     var isAlive: Boolean = true,
     var score: Int = 0,
     @Serializable(with = ComposeColorSerializer::class) val color: Color,
@@ -68,6 +66,7 @@ data class LatestPlayerState(
     val score: Int,
     val isAlive: Boolean,
     val boostState: SpecialMoveState,
+    val boostCooldownFrames: Int
 )
 
 // Helper function to calculate the next position of a player
