@@ -4,6 +4,9 @@ import android.app.Application
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.achtungdiekurve.data.CollisionResult
+import com.example.achtungdiekurve.data.CollisionType
+import com.example.achtungdiekurve.data.ConfettiAnimation
 import com.example.achtungdiekurve.data.GameConstants
 import com.example.achtungdiekurve.data.GameState
 import com.example.achtungdiekurve.data.LatestPlayerState
@@ -26,6 +29,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.random.Random
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
@@ -34,6 +39,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val clientPlayerStates = mutableMapOf<String, PlayerState>()
     private val localPlayer = gameState.value.localPlayer.copy()
     private var gameLoopJob: Job? = null
+
+
 
     private val nearbyConnectionsManager: NearbyConnectionsManager by lazy {
         NearbyConnectionsManager(
@@ -429,7 +436,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // This is the core game logic, only run on the host
-    private fun updateGame(screenWidthPx: Float, screenHeightPx: Float) {
+    private fun updateGame(screenWidthPx: Float, screenHeightPx: Float)
+    {
+        if (_gameState.value.isPausedForCollision) {
+            return
+        }
+
         val alivePlayers =
             clientPlayerStates.values.toList().plus(localPlayer).filter { it.isAlive }.size
 
@@ -451,28 +463,63 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // Check for collisions AFTER all players have moved
         // Host collision check for self
-        if (localPlayer.isAlive && checkForCollisions(
-                localPlayer, clientPlayerStates.values, screenWidthPx, screenHeightPx
+        if (localPlayer.isAlive) {
+            val allOtherPlayers = clientPlayerStates.values
+            val collision = checkForCollisions(
+                localPlayer, allOtherPlayers, screenWidthPx, screenHeightPx
             )
-        ) {
-            localPlayer.isAlive = false
-            distributePoints()
+            if (collision != null) {
+                // A collision occurred!
+                localPlayer.isAlive = false
+                localPlayer.lastCollision = collision
+                _gameState.update {
+                    it.copy(lastCollision = collision)
+                }
+
+
+//                val impactAngleRad = calculateImpactAngle(localPlayer.direction, collision.surfaceNormal)
+//                val impactAngleDeg = impactAngleRad * 180f / PI.toFloat() // Convert to degrees if needed
+//
+//                Log.d("Meet","Host player crashed! Type: ${collision.type}, Impact Angle: $impactAngleDeg degrees" )
+
+                // Trigger collision animation at the impact point
+                val impactPoint = localPlayer.trail.last().position
+                handleCollisionAnimation(impactPoint)
+
+
+                distributePoints()
+                return
+            }
         }
 
         // Host collision check for client
         if (_gameState.value.multiplayerState.isMultiplayer) {
-            for ((key, value) in clientPlayerStates) {
-                var otherPlayers = clientPlayerStates.filterKeys { it != key }.values
-                otherPlayers = otherPlayers.plus(localPlayer)
+            for ((key, clientPlayer) in clientPlayerStates) {
+                if (clientPlayer.isAlive) {
+                    var otherPlayers = clientPlayerStates.filterKeys { it != key }.values.toMutableList()
+                    otherPlayers.add(localPlayer)
 
-                if (value.isAlive && checkForCollisions(
-                        value, otherPlayers, screenWidthPx, screenHeightPx
+                    val collision = checkForCollisions(
+                        clientPlayer, otherPlayers, screenWidthPx, screenHeightPx
                     )
-                ) {
-                    value.isAlive = false
-                    distributePoints()
+                    if (collision != null) {
+                        clientPlayer.isAlive = false
+
+                        clientPlayer.lastCollision = collision
+
+//                        val impactAngleRad = calculateImpactAngle(clientPlayer.direction, collision.surfaceNormal)
+//                        val impactAngleDeg = impactAngleRad * 180f / PI.toFloat()
+//                        println("Client ${clientPlayer.name} crashed! Type: ${collision.type}, Impact Angle: $impactAngleDeg degrees")
+
+                        // Trigger collision animation
+                        val impactPoint = clientPlayer.trail.last().position
+                        handleCollisionAnimation(impactPoint)
+                        distributePoints()
+                        return
+                    }
                 }
             }
+
         }
 
         if (_gameState.value.multiplayerState.isMultiplayer) {
@@ -531,43 +578,51 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Collision detection now considers both players' trails
     private fun checkForCollisions(
         selfPlayer: PlayerState, otherPlayers: Collection<PlayerState>, width: Float, height: Float
-    ): Boolean {
+    ): CollisionResult? { // Returns CollisionResult? instead of Boolean
         val radius = GameConstants.STROKE_WIDTH * GameConstants.COLLISION_RADIUS_MULTIPLIER
         val pos = selfPlayer.trail.last().position
 
         // Boundary collision
-        if (pos.x < 0 || pos.x > width || pos.y < 0 || pos.y > height) return true
+        if (pos.x < 0) return CollisionResult(CollisionType.BOUNDARY, Offset(1f, 0f)) // Left wall normal
+        if (pos.x > width) return CollisionResult(CollisionType.BOUNDARY, Offset(-1f, 0f)) // Right wall normal
+        if (pos.y < 0) return CollisionResult(
+            CollisionType.BOUNDARY,
+            Offset(0f, 1f)
+        ) // Top wall normal
+        if (pos.y > height) return CollisionResult(CollisionType.BOUNDARY, Offset(0f, -1f)) // Bottom wall normal
 
-        // Self-collision (ignore recent segments)
-        val selfTrail = selfPlayer.trail
-        if (selfTrail.size > GameConstants.MIN_SEGMENTS_FOR_SELF_COLLISION) { // Use a constant
-            for (i in 0 until selfTrail.size - GameConstants.MIN_SEGMENTS_FOR_SELF_COLLISION) {
-                if (!selfTrail[i].isGap && !selfTrail[i + 1].isGap && distanceFromPointToSegment(
-                        pos, selfTrail[i].position, selfTrail[i + 1].position
-                    ) < radius
-                ) {
-                    return true
-                }
+        // --- Trail Collisions ---
+
+        val allTrails = otherPlayers.map { it.trail }.toMutableList()
+        allTrails.add(selfPlayer.trail)
+
+        for (trail in allTrails) {
+            val segmentsToIgnore = if (trail === selfPlayer.trail) {
+                GameConstants.MIN_SEGMENTS_FOR_SELF_COLLISION
+            } else {
+                1 // For opponent trails, only ignore the very last segment
             }
-        }
 
-        // Opponent collision (if multiplayer)
-        if (_gameState.value.multiplayerState.isMultiplayer) {
-            for (otherPlayer in otherPlayers) {
-                val opponentTrail = otherPlayer.trail
-                if (opponentTrail.size > 1) {
-                    for (i in 0 until opponentTrail.size - 1) {
-                        if (!opponentTrail[i].isGap && !opponentTrail[i + 1].isGap && distanceFromPointToSegment(
-                                pos, opponentTrail[i].position, opponentTrail[i + 1].position
-                            ) < radius
-                        ) {
-                            return true
-                        }
+            if (trail.size > segmentsToIgnore) {
+                for (i in 0 until trail.size - segmentsToIgnore) {
+                    val p1 = trail[i]
+                    val p2 = trail[i + 1]
+
+                    if (!p1.isGap && !p2.isGap &&
+                        distanceFromPointToSegment(pos, p1.position, p2.position) < radius
+                    ) {
+                        // Collision detected! Calculate the surface normal of the trail segment.
+                        val segmentVector = p2.position - p1.position
+                        //
+                        val playerDir = Offset(cos(selfPlayer.direction), sin(selfPlayer.direction))
+
+                        return CollisionResult(CollisionType.TRAIL, -playerDir)
                     }
                 }
             }
         }
-        return false
+
+        return null // No collision
     }
 
     private fun distributePoints() {
@@ -606,6 +661,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+            "collision_event" -> if (!isHost() && data != null) {
+                val coords = data.split(",")
+                if (coords.size == 2) {
+                    val x = coords[0].toFloatOrNull()
+                    val y = coords[1].toFloatOrNull()
+                    if (x != null && y != null) {
+                        handleCollisionAnimation(Offset(x, y))
+                    }
+                }
+            }
+
+
 
             "match_state" -> if (!isHost() && data != null) handleMatchState(data)
         }
@@ -641,7 +708,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         val latestPlayerStates = playerStates.map {
             LatestPlayerState(
-                it.id, it.trail.last(), it.score, it.isAlive, it.boostState
+                it.id, it.trail.last(), it.score, it.isAlive, it.boostState, it.lastCollision
             )
         }
 
@@ -686,7 +753,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 trail = (current.localPlayer.trail + localPlayerState.pos).toMutableList(),
                 score = localPlayerState.score,
                 isAlive = localPlayerState.isAlive,
-                boostState = localPlayerState.boostState
+                boostState = localPlayerState.boostState ,
+                lastCollision = localPlayerState.lastCollision
             )
 
             // Build new opponents list
@@ -697,7 +765,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         trail = (opponent.trail + state.pos).toMutableList(),
                         score = state.score,
                         isAlive = state.isAlive,
-                        boostState = state.boostState
+                        boostState = state.boostState,
+                        lastCollision = state.lastCollision
                     )
                 } else {
                     opponent
@@ -881,6 +950,75 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         nearbyConnectionsManager.stopAllEndpoints()
         stopGameLoop()
     }
+
+    private fun handleCollisionAnimation(position: Offset) {
+        viewModelScope.launch {
+            if (isHost()) {
+                nearbyConnectionsManager.sendGameData("collision_event:${position.x},${position.y}")
+            }
+            val animationId = "${System.currentTimeMillis()}_${position.x}_${position.y}"
+
+            // Calculate zoom center relative to screen
+            val zoomCenter = position
+
+            // Start animation
+            _gameState.update {
+                it.copy(
+                    collisionAnimation = ConfettiAnimation(
+                        position = position,
+                        rotation = 0f,
+                        id = animationId
+                    ),
+                    isPausedForCollision = true,
+                    zoomScale = 1f,
+                    zoomCenter = zoomCenter
+                )
+            }
+
+            // Zoom in animation
+            val zoomDuration = 50L
+            val zoomSteps = 50
+            val zoomDelay = zoomDuration / zoomSteps
+
+            for (i in 1..zoomSteps) {
+                val progress = i.toFloat() / zoomSteps
+                val scale = 1f + (2f * progress) // Zoom to 3x
+                _gameState.update {
+                    it.copy(zoomScale = scale)
+                }
+                delay(zoomDelay)
+            }
+
+            // Hold at max zoom for animation
+            delay(1000L)
+
+            // Zoom out animation
+            for (i in zoomSteps downTo 1) {
+                val progress = i.toFloat() / zoomSteps
+                val scale = 1f + (2f * progress)
+                _gameState.update {
+                    it.copy(zoomScale = scale)
+                }
+                delay(zoomDelay)
+            }
+
+            // Clear animation and resume
+            _gameState.update {
+                it.copy(
+                    collisionAnimation = null,
+                    isPausedForCollision = false,
+                    zoomScale = 1f
+                )
+            }
+
+
+        }
+    }
+
+
+
+
+
 }
 
 
@@ -900,6 +1038,7 @@ private fun PlayerState.resetForNewRound() {
     boostCooldownFrames = 0
     isAlive = true
     direction = 0f
+    lastCollision = null
 }
 
 private fun PlayerState.toUiState(): PlayerState {

@@ -3,8 +3,10 @@ package com.example.achtungdiekurve.data
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.Serializable
+import kotlin.math.acos
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 @Serializable
 data class TrailSegment(
@@ -40,7 +42,13 @@ data class GameState(
     val screenWidthPx: Float = 0f,
     val screenHeightPx: Float = 0f,
     val scoreToWin: Int = 5,
-    val matchState: MatchState = MatchState.SETUP
+    val matchState: MatchState = MatchState.SETUP,
+    val lastCollision: CollisionResult? = null,
+    val collisionAnimation: ConfettiAnimation? = null,
+    val isPausedForCollision: Boolean = false,
+    val zoomScale: Float = 1f,
+    val zoomCenter: Offset = Offset.Zero
+
 )
 
 // Internal data class to hold the full state of a player for game logic
@@ -58,7 +66,8 @@ data class PlayerState(
     var score: Int = 0,
     @Serializable(with = ComposeColorSerializer::class) val color: Color,
     val id: String,
-    var name: String
+    var name: String,
+    var lastCollision: CollisionResult? = null,
 )
 
 @Serializable
@@ -68,6 +77,7 @@ data class LatestPlayerState(
     val score: Int,
     val isAlive: Boolean,
     val boostState: SpecialMoveState,
+    val lastCollision: CollisionResult? = null
 )
 
 // Helper function to calculate the next position of a player
@@ -94,3 +104,36 @@ fun distanceFromPointToSegment(p: Offset, a: Offset, b: Offset): Float {
 
 // Infix function for dot product of two Offsets
 infix fun Offset.dot(other: Offset): Float = this.x * other.x + this.y * other.y
+
+enum class CollisionType {
+    BOUNDARY, TRAIL
+}
+
+
+@Serializable
+data class CollisionResult(
+    val type: CollisionType,
+    @Serializable(with = OffsetSerializer::class) val surfaceNormal: Offset
+)
+
+
+fun calculateImpactAngle(playerDirection: Float, surfaceNormal: Offset): Float {
+
+    val directionVector = Offset(cos(playerDirection), sin(playerDirection))
+    val dotProduct = (-directionVector.x * surfaceNormal.x) + (-directionVector.y * surfaceNormal.y)
+    return acos(dotProduct.coerceIn(-1.0f, 1.0f))
+}
+
+// Data class to hold confetti animation state
+data class ConfettiAnimation(
+    val position: Offset,
+    val rotation: Float,
+    val id: String
+)
+
+// --- Helper extension functions for Offset ---
+
+fun Offset.normalized(): Offset {
+    val length = sqrt(this.x * this.x + this.y * this.y)
+    return if (length > 0) this / length else Offset.Zero
+}

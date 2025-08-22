@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -32,7 +33,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -42,6 +45,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.airbnb.lottie.compose.LottieAnimation
+import com.airbnb.lottie.compose.LottieCompositionSpec
+import com.airbnb.lottie.compose.animateLottieCompositionAsState
+import com.airbnb.lottie.compose.rememberLottieComposition
+import com.example.achtungdiekurve.R
 import com.example.achtungdiekurve.data.ControlMode
 import com.example.achtungdiekurve.data.GameConstants
 import com.example.achtungdiekurve.data.GameState
@@ -64,6 +72,10 @@ fun CurveGameScreen(
     val controlMode by settingsViewModel.controlMode.collectAsState()
     val nickname by settingsViewModel.nickname.collectAsState()
     val localWindowInfo = LocalWindowInfo.current
+
+    val composition by rememberLottieComposition(
+        LottieCompositionSpec.RawRes(R.raw.confetti)
+    )
 
     if (gameState.multiplayerState.isHost) {
         LaunchedEffect(
@@ -138,7 +150,29 @@ fun CurveGameScreen(
                     totalDragAmount = 0f
                 })
             }) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
+        Canvas(modifier = Modifier.fillMaxSize()
+            .graphicsLayer {
+                if (gameState.collisionAnimation != null) {
+                    // The anchor point (collision point) in pixels.
+                    val anchorX = gameState.zoomCenter.x
+                    val anchorY = gameState.zoomCenter.y
+
+                    // Set the pivot for scaling to be the anchor point.
+                    // transformOrigin requires fractions of the total size.
+                    transformOrigin = TransformOrigin(
+                        pivotFractionX = if (size.width > 0) anchorX / size.width else 0.5f,
+                        pivotFractionY = if (size.height > 0) anchorY / size.height else 0.5f
+                    )
+
+                    // Apply the scale. Because the origin is set, the anchor point will remain
+                    // stationary, and the canvas will expand/contract around it.
+                    scaleX = gameState.zoomScale
+                    scaleY = gameState.zoomScale
+                }
+            }
+
+
+        ) {
             // background (whole canvas)
             drawRect(
                 color = Color.Black, size = size
@@ -154,8 +188,71 @@ fun CurveGameScreen(
                 )
             )
             drawPlayerTrail(gameState.localPlayer)
-            gameState.opponents.forEach { drawPlayerTrail(it) }
+            gameState.localPlayer.lastCollision?.let { collision ->
+           //     val impactPoint = gameState.localPlayer.trail.last().position
+                    //drawImpactNormal(impactPoint, collision.surfaceNormal)
+
+            }
+
+            gameState.opponents.forEach { player ->
+                drawPlayerTrail(player)
+                player.lastCollision?.let { collision ->
+               //     val impactPoint = player.trail.last().position
+                //  drawImpactNormal(impactPoint, collision.surfaceNormal)
+                }
+            }
+
+
+
         }
+
+        gameState.collisionAnimation?.let { animation ->
+            val composition by rememberLottieComposition(
+                LottieCompositionSpec.RawRes(R.raw.confetti)
+            )
+            val progress by animateLottieCompositionAsState(
+                composition = composition,
+                iterations = 1,
+                speed = 1.5f
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        // Apply same zoom transformation to the animation
+                        if (gameState.collisionAnimation != null) {
+                            val anchorX = gameState.zoomCenter.x
+                            val anchorY = gameState.zoomCenter.y
+
+                            transformOrigin = TransformOrigin(
+                                pivotFractionX = if (size.width > 0) anchorX / size.width else 0.5f,
+                                pivotFractionY = if (size.height > 0) anchorY / size.height else 0.5f
+                            )
+
+                            scaleX = gameState.zoomScale
+                            scaleY = gameState.zoomScale
+                        }
+
+                    }
+            ) {
+                val lottieSize = 200.dp
+                val lottieSizePx = with(LocalDensity.current) { lottieSize.toPx() }
+
+
+                LottieAnimation(
+                    composition = composition,
+                    progress = { progress },
+                    modifier = Modifier
+                        .size(lottieSize)
+                        .offset(
+                            x = with(LocalDensity.current) { (animation.position.x - lottieSizePx / 2).toDp() },
+                            y = with(LocalDensity.current) { (animation.position.y - lottieSizePx / 2).toDp() }
+                        )
+                )
+            }
+        }
+
 
         Row(
             modifier = Modifier
@@ -262,6 +359,23 @@ private fun DrawScope.drawPlayerTrail(playerState: PlayerState) {
             )
         }
     }
+}
+
+private fun DrawScope.drawImpactNormal(
+    impactPoint: Offset,
+    surfaceNormal: Offset,
+    length: Float = 850f, // length of green line
+    color: Color = Color.Green
+) {
+    // scale normal vector by length
+    val endPoint = impactPoint + surfaceNormal * length
+
+    drawLine(
+        color = color,
+        start = impactPoint,
+        end = endPoint,
+        strokeWidth = 4f
+    )
 }
 
 @Composable
