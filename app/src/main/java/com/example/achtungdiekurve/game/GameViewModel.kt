@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.math.PI
@@ -653,8 +654,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val parts = data.split(":", limit = 2)
         val localPlayerId = parts[0]
         val playersJson = parts[1]
-
-        val playerStates: MutableList<PlayerState> = playersJson.split(";").map { Json.decodeFromString(it) }.toMutableList()
+        val playerStates: MutableList<PlayerState> = playersJson.split(";").map { Json.decodeFromString<PlayerState>(it) }.toMutableList()
         val index = playerStates.indexOfFirst { it.id == localPlayerId }
         val localPlayerState = playerStates.removeAt(index)
 

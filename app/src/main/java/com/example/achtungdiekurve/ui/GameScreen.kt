@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -61,6 +62,7 @@ import com.example.achtungdiekurve.game.rememberAccelerometerSensorHandler
 import com.example.achtungdiekurve.settings.SettingsViewModel
 import kotlin.math.ceil
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 @Composable
 fun CurveGameScreen(
@@ -228,18 +230,42 @@ fun CurveGameScreen(
                     }
             ) {
                 val lottieSize = 200.dp
-                val lottieSizePx = with(LocalDensity.current) { lottieSize.toPx() }
+                val canvasSize = LocalDensity.current.run {
+                    Size(
+                        LocalWindowInfo.current.containerSize.width.toDp().toPx(),
+                        LocalWindowInfo.current.containerSize.height.toDp().toPx()
+                    )
+                }
 
+                val scale = min(
+                    canvasSize.width / GameConstants.GAME_WORLD_WIDTH,
+                    canvasSize.height / GameConstants.GAME_WORLD_HEIGHT
+                )
+
+                val gameWorldOffset = Offset(
+                    (canvasSize.width - GameConstants.GAME_WORLD_WIDTH * scale) / 2f,
+                    (canvasSize.height - GameConstants.GAME_WORLD_HEIGHT * scale) / 2f
+                )
+
+                val lottieSizePx = with(LocalDensity.current) { lottieSize.toPx() }
 
                 LottieAnimation(
                     composition = composition,
                     progress = { progress },
                     modifier = Modifier
                         .size(lottieSize)
-                        .offset(
-                            x = with(LocalDensity.current) { (animation.position.x - lottieSizePx / 2).toDp() },
-                            y = with(LocalDensity.current) { (animation.position.y - lottieSizePx / 2).toDp() }
-                        )
+                        .offset{
+
+                            val transformedX = animation.position.x * scale + gameWorldOffset.x
+                            val transformedY = animation.position.y * scale + gameWorldOffset.y
+
+                            val xOffset = transformedX - lottieSizePx / 2
+                            val yOffset = transformedY - lottieSizePx / 2
+
+                            IntOffset(xOffset.roundToInt(), yOffset.roundToInt())
+                        }
+
+
                 )
             }
         }
