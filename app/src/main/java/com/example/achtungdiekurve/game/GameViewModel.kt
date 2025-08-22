@@ -33,6 +33,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
+
 class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _gameState = MutableStateFlow(GameState())
     val gameState: StateFlow<GameState> = _gameState.asStateFlow()
@@ -147,7 +148,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Nearby Connections Callbacks ---
     private fun onNearbyConnected(endpointId: String, endpointName: String, isHost: Boolean) {
-        //this.connectedEndpointId = endpointId
         _gameState.update {
             it.copy(
                 multiplayerState = it.multiplayerState.copy(
@@ -157,17 +157,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (isHost) {
-            clientPlayerStates.put(
-                endpointId, PlayerState(
-                    color = GameConstants.COLORS.first { c -> clientPlayerStates.none { it.value.color == c } },
-                    id = endpointId,
-                    name = endpointName
-                )
+            clientPlayerStates[endpointId] = PlayerState(
+                color = GameConstants.COLORS.first { c -> clientPlayerStates.none { it.value.color == c } },
+                id = endpointId,
+                name = if (endpointName.matches(Regex("^Google.*"))) endpointId else endpointName
             )
             _gameState.update {
                 it.copy(
                     multiplayerState = it.multiplayerState.copy(
-                        connectedEndpoints = clientPlayerStates.values.joinToString(", ") { "${it.name} (${it.id})" })
+                        connectedEndpoints = clientPlayerStates.values.joinToString(", ") { p -> p.name })
                 )
             }
             resetGame()
@@ -223,9 +221,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update { it.copy(isRunning = newIsRunning) }
 
         if (newIsRunning) {
-            startGameLoop(
-                _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
-            )
+            startGameLoop()
         } else {
             stopGameLoop()
         }
@@ -270,9 +266,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             // Send the running status to client
             nearbyConnectionsManager.sendGameData("game_running_status:true")
 
-            startGameLoop(
-                _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
-            )
+            startGameLoop()
         } else {
             // Client requests host to reset
             nearbyConnectionsManager.sendGameData("request_reset_game:")
@@ -299,12 +293,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         nearbyConnectionsManager.sendGameData("game_running_status:true")
         sendMatchState()
 
-        initializeGamePositions(
-            _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
-        )
-        startGameLoop(
-            _gameState.value.screenWidthPx, _gameState.value.screenHeightPx
-        )
+        initializeGamePositions()
+        startGameLoop()
     }
 
     fun setScoreToWin(score: Int) {
@@ -340,14 +330,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun initializeGamePositions(screenWidthPx: Float, screenHeightPx: Float) {
+    fun initializeGamePositions() {
         if (!isHost()) return
-
-        _gameState.update {
-            it.copy(
-                screenWidthPx = screenWidthPx, screenHeightPx = screenHeightPx
-            )
-        }
 
         val shouldInitialize =
             localPlayer.trail.isEmpty() || clientPlayerStates.all { it.value.trail.isEmpty() } || gameState.value.matchState != MatchState.RUNNING
@@ -363,9 +347,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             var tries = 0
             do {
                 val x =
-                    Random.nextFloat() * (gameState.value.screenWidthPx - 2 * edgeMargin) + edgeMargin
+                    Random.nextFloat() * (GameConstants.GAME_WORLD_WIDTH - 2 * edgeMargin) + edgeMargin
                 val y =
-                    Random.nextFloat() * (gameState.value.screenHeightPx - 2 * edgeMargin) + edgeMargin
+                    Random.nextFloat() * (GameConstants.GAME_WORLD_HEIGHT - 2 * edgeMargin) + edgeMargin
                 pos = Offset(x, y)
                 tries++
             } while (takenPositions.any { other -> (pos - other).getDistance() < playerMargin } && tries < 100)
@@ -398,9 +382,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     clientPlayer.key, "player_state_full_sync:${clientPlayer.key}:$gameStateString"
                 )
             }
-            nearbyConnectionsManager.sendGameData(
-                "screen_dimensions:${gameState.value.screenWidthPx},${gameState.value.screenHeightPx}"
-            )
         }
 
         _gameState.update {
@@ -411,7 +392,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
 
-    fun startGameLoop(screenWidthPx: Float, screenHeightPx: Float) {
+    fun startGameLoop() {
         if (gameLoopJob?.isActive == true) return
         if (!isHost()) {
             // Clients do not run the game loop directly
@@ -422,7 +403,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update { it.copy(isRunning = true) }
             while (_gameState.value.isRunning) {
                 delay(GameConstants.GAME_TICK_RATE_MS)
-                updateGame(screenWidthPx, screenHeightPx)
+                updateGame()
             }
         }
     }
@@ -436,8 +417,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // This is the core game logic, only run on the host
-    private fun updateGame(screenWidthPx: Float, screenHeightPx: Float)
-    {
+    private fun updateGame() {
         if (_gameState.value.isPausedForCollision) {
             return
         }
@@ -466,7 +446,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (localPlayer.isAlive) {
             val allOtherPlayers = clientPlayerStates.values
             val collision = checkForCollisions(
-                localPlayer, allOtherPlayers, screenWidthPx, screenHeightPx
+                localPlayer, allOtherPlayers
             )
             if (collision != null) {
                 // A collision occurred!
@@ -475,13 +455,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 _gameState.update {
                     it.copy(lastCollision = collision)
                 }
-
-
-//                val impactAngleRad = calculateImpactAngle(localPlayer.direction, collision.surfaceNormal)
-//                val impactAngleDeg = impactAngleRad * 180f / PI.toFloat() // Convert to degrees if needed
-//
-//                Log.d("Meet","Host player crashed! Type: ${collision.type}, Impact Angle: $impactAngleDeg degrees" )
-
                 // Trigger collision animation at the impact point
                 val impactPoint = localPlayer.trail.last().position
                 handleCollisionAnimation(impactPoint)
@@ -496,21 +469,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (_gameState.value.multiplayerState.isMultiplayer) {
             for ((key, clientPlayer) in clientPlayerStates) {
                 if (clientPlayer.isAlive) {
-                    var otherPlayers = clientPlayerStates.filterKeys { it != key }.values.toMutableList()
+                    val otherPlayers = clientPlayerStates.filterKeys { it != key }.values.toMutableList()
                     otherPlayers.add(localPlayer)
 
                     val collision = checkForCollisions(
-                        clientPlayer, otherPlayers, screenWidthPx, screenHeightPx
+                        clientPlayer, otherPlayers
                     )
                     if (collision != null) {
                         clientPlayer.isAlive = false
-
                         clientPlayer.lastCollision = collision
-
-//                        val impactAngleRad = calculateImpactAngle(clientPlayer.direction, collision.surfaceNormal)
-//                        val impactAngleDeg = impactAngleRad * 180f / PI.toFloat()
-//                        println("Client ${clientPlayer.name} crashed! Type: ${collision.type}, Impact Angle: $impactAngleDeg degrees")
-
                         // Trigger collision animation
                         val impactPoint = clientPlayer.trail.last().position
                         handleCollisionAnimation(impactPoint)
@@ -519,7 +486,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
-
         }
 
         if (_gameState.value.multiplayerState.isMultiplayer) {
@@ -539,7 +505,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // isLocal is true for the player whose input is controlled by this device (on host, it's hostPlayerState; on client, it's clientPlayerState for sending input)
     private fun updatePlayerState(player: PlayerState) {
         // Update direction and position
         player.direction += player.turning * GameConstants.TURN_SPEED
@@ -575,24 +540,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         player.trail.add(TrailSegment(nextPos, isGap = !player.isDrawing))
     }
 
-    // Collision detection now considers both players' trails
     private fun checkForCollisions(
-        selfPlayer: PlayerState, otherPlayers: Collection<PlayerState>, width: Float, height: Float
-    ): CollisionResult? { // Returns CollisionResult? instead of Boolean
-        val radius = GameConstants.STROKE_WIDTH * GameConstants.COLLISION_RADIUS_MULTIPLIER
+        selfPlayer: PlayerState, otherPlayers: Collection<PlayerState>
+    ): CollisionResult? {
+        val radius = GameConstants.STROKE_WIDTH.value * GameConstants.COLLISION_RADIUS_MULTIPLIER
         val pos = selfPlayer.trail.last().position
 
         // Boundary collision
         if (pos.x < 0) return CollisionResult(CollisionType.BOUNDARY, Offset(1f, 0f)) // Left wall normal
-        if (pos.x > width) return CollisionResult(CollisionType.BOUNDARY, Offset(-1f, 0f)) // Right wall normal
-        if (pos.y < 0) return CollisionResult(
-            CollisionType.BOUNDARY,
-            Offset(0f, 1f)
-        ) // Top wall normal
-        if (pos.y > height) return CollisionResult(CollisionType.BOUNDARY, Offset(0f, -1f)) // Bottom wall normal
+        if (pos.x > GameConstants.GAME_WORLD_WIDTH) return CollisionResult(CollisionType.BOUNDARY, Offset(-1f, 0f)) // Right wall normal
+        if (pos.y < 0) return CollisionResult(CollisionType.BOUNDARY, Offset(0f, 1f)) // Top wall normal
+        if (pos.y > GameConstants.GAME_WORLD_HEIGHT) return CollisionResult(CollisionType.BOUNDARY, Offset(0f, -1f)) // Bottom wall normal
 
         // --- Trail Collisions ---
-
         val allTrails = otherPlayers.map { it.trail }.toMutableList()
         allTrails.add(selfPlayer.trail)
 
@@ -611,11 +571,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     if (!p1.isGap && !p2.isGap &&
                         distanceFromPointToSegment(pos, p1.position, p2.position) < radius
                     ) {
-                        // Collision detected! Calculate the surface normal of the trail segment.
-                        val segmentVector = p2.position - p1.position
-                        //
                         val playerDir = Offset(cos(selfPlayer.direction), sin(selfPlayer.direction))
-
                         return CollisionResult(CollisionType.TRAIL, -playerDir)
                     }
                 }
@@ -637,10 +593,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val data = parts.getOrNull(1)
 
         when (type) {
-            "player_state_full_sync" -> if (!isHost() && data != null) handlePlayerStateFullSync(
-                data
-            )
-
+            "player_state_full_sync" -> if (!isHost() && data != null) handlePlayerStateFullSync(data)
             "player_state_update" -> if (!isHost() && data != null) handlePlayerStateUpdate(data)
             "client_input" -> if (isHost() && data != null) handleClientInput(endpointId, data)
             "game_running_status" -> if (!isHost() && data != null) handleGameRunningStatus(data.toBoolean())
@@ -652,15 +605,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     scoreToWin = data.toInt()
                 )
             }
-
-            "screen_dimensions" -> if (!isHost() && data != null) {
-                val (width, height) = data.split(",")
-                _gameState.update {
-                    it.copy(
-                        screenWidthPx = width.toFloat(), screenHeightPx = height.toFloat()
-                    )
-                }
-            }
             "collision_event" -> if (!isHost() && data != null) {
                 val coords = data.split(",")
                 if (coords.size == 2) {
@@ -671,67 +615,52 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
-
-
-
             "match_state" -> if (!isHost() && data != null) handleMatchState(data)
         }
     }
 
-    // Client-side function to reset for a new round without touching scores
     private fun resetGameForNewRound() {
         stopGameLoop()
-
         localPlayer.resetForNewRound()
         clientPlayerStates.forEach { it.value.resetForNewRound() }
-
         _gameState.update {
             it.copy(
                 localPlayer = localPlayer.toUiState(),
                 opponents = clientPlayerStates.values.map { it.toUiState() },
             )
         }
-        initializeGamePositions(_gameState.value.screenWidthPx, _gameState.value.screenHeightPx)
+        initializeGamePositions()
     }
 
-    // Host to client: full game state sync - added score
     private fun serializeFullState(): String {
         val playerStates = clientPlayerStates.values.toList().plus(localPlayer)
-
         val json = playerStates.map { Json.encodeToString(it) }
-
         return json.joinToString(";")
     }
 
     private fun serializeGameState(): String {
         val playerStates = clientPlayerStates.values.toList().plus(localPlayer)
-
         val latestPlayerStates = playerStates.map {
             LatestPlayerState(
-                it.id, it.trail.last(), it.score, it.isAlive, it.boostState, it.lastCollision
+                it.id, it.trail.last(), it.score, it.isAlive, it.boostState, it.lastCollision,it.boostCooldownFrames
             )
         }
-
         val json = latestPlayerStates.map { Json.encodeToString(it) }
-
         return json.joinToString(";")
     }
 
     private fun handlePlayerStateFullSync(data: String) {
         val parts = data.split(":", limit = 2)
         val localPlayerId = parts[0]
-        val players = parts[(1)]
+        val playersJson = parts[1]
 
-        var playerStates: List<PlayerState> = players.split(";").map { Json.decodeFromString(it) }
-        playerStates = playerStates.toMutableList()
-
+        val playerStates: MutableList<PlayerState> = playersJson.split(";").map { Json.decodeFromString(it) }.toMutableList()
         val index = playerStates.indexOfFirst { it.id == localPlayerId }
-
-        val localPlayer = playerStates.removeAt(index)
+        val localPlayerState = playerStates.removeAt(index)
 
         _gameState.update {
             it.copy(
-                localPlayer = localPlayer, opponents = playerStates
+                localPlayer = localPlayerState, opponents = playerStates
             )
         }
     }
@@ -739,28 +668,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun handlePlayerStateUpdate(data: String) {
         val parts = data.split(":", limit = 2)
         val localPlayerId = parts[0]
-        val players = parts[1]
+        val playersJson = parts[1]
 
-        val playerStates: List<LatestPlayerState> =
-            players.split(";").map { Json.decodeFromString<LatestPlayerState>(it) }
-
+        val playerStates: List<LatestPlayerState> = playersJson.split(";").map { Json.decodeFromString<LatestPlayerState>(it) }
         val localPlayerState = playerStates.first { it.id == localPlayerId }
         val opponentStates = playerStates.filter { it.id != localPlayerId }
 
         _gameState.update { current ->
-            // Build new local player instance
             val updatedLocalPlayer = current.localPlayer.copy(
                 trail = (current.localPlayer.trail + localPlayerState.pos).toMutableList(),
                 score = localPlayerState.score,
                 isAlive = localPlayerState.isAlive,
-                boostState = localPlayerState.boostState ,
+                boostState = localPlayerState.boostState,
                 lastCollision = localPlayerState.lastCollision
             )
-
-            // Build new opponents list
             val updatedOpponents = current.opponents.map { opponent ->
-                val state = opponentStates.find { it.id == opponent.id }
-                if (state != null) {
+                opponentStates.find { it.id == opponent.id }?.let { state ->
                     opponent.copy(
                         trail = (opponent.trail + state.pos).toMutableList(),
                         score = state.score,
@@ -768,25 +691,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         boostState = state.boostState,
                         lastCollision = state.lastCollision
                     )
-                } else {
-                    opponent
-                }
+                } ?: opponent
             }
-
             current.copy(
                 localPlayer = updatedLocalPlayer,
-                opponents = updatedOpponents,
-                isRunning = current.isRunning
+                opponents = updatedOpponents
             )
         }
     }
 
-
-    // Client to host: player input
     private fun handleClientInput(endpointId: String, data: String) {
         val parts = data.split(":")
-        val playerState = clientPlayerStates[endpointId]
-        if (playerState == null) return
+        val playerState = clientPlayerStates[endpointId] ?: return
         when (parts[0]) {
             "turning" -> playerState.turning = parts[1].toFloat()
             "boost" -> {
@@ -802,17 +718,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update { it.copy(isRunning = receivedIsRunning) }
     }
 
-    // Client receives round over status from host
     private fun handleRemoteRoundOver(data: String) {
-//        val parts = data.split(":", limit = 3)
-//        hostPlayerState.score = parts[0].toInt()
-//        clientPlayerState.score = parts[1].toInt()
-//        val message = parts[2]
-
         handleRoundEnd()
     }
 
-    // Client receives match over status from host
     private fun handleMatchState(data: String) {
         _gameState.update {
             it.copy(
@@ -845,25 +754,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update {
             it.copy(
                 matchState = MatchState.ROUND_OVER
-//                isRoundOver = true,
-//                gameOverMessage = message,
-//                localPlayer = if (isHost()) localPlayer.toUiState(true) else clientPlayerState.toUiState(false),
-//                opponentPlayer = if (isHost()) clientPlayerState.toUiState(false) else localPlayer.toUiState(true)
             )
         }
     }
 
     private fun handleMatchOver() {
-
-        // Update host UI immediately
         _gameState.update {
             it.copy(
                 matchState = MatchState.GAME_OVER
             )
         }
-
-        // Inform the client about the final game over with their specific message
-        nearbyConnectionsManager.sendGameData("match_over")
+        sendMatchState()
     }
 
     fun sendMatchState() {
@@ -876,14 +777,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onScoreSetupStartGame() {
         startNewMatch()
-
-//        if (_gameState.value.matchState == MatchState.GAME_OVER) {
-//            startNewMatch()
-//        } else {
-//            initializeGamePositions(_gameState.value.screenWidthPx, _gameState.value.screenHeightPx)
-//            toggleGameRunning()
-//        }
-//        hideScoreSetup()
     }
 
     fun onGameOverNewGame() {
@@ -894,9 +787,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         } else {
-            // For regular round over, proceed as normal
             resetGameRound()
-            initializeGamePositions(_gameState.value.screenWidthPx, _gameState.value.screenHeightPx)
+            initializeGamePositions()
             hideGameOver()
         }
     }
@@ -908,42 +800,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun decrementScoreToWin() {
         setScoreToWin((_gameState.value.scoreToWin - 1).coerceAtLeast(1))
     }
-
-//    val shouldShowScoreSetup: StateFlow<Boolean> = gameState.map { state ->
-//        val showBefore =
-//            state.multiplayerState.isHost && !state.isRunning && !state.isRoundOver && state.localPlayer.score == 0 && state.opponents.all { it.score == 0 }
-//
-//        val showAfter =
-//            state.multiplayerState.isHost && state.isMatchOver && !state.isRunning && !state.isRoundOver
-//
-//        showBefore || showAfter
-//    }.onEach { shouldShow: Boolean ->
-//        if (shouldShow) updateScoreSetupText()
-//    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-
-//    val shouldShowGameOver: StateFlow<Boolean> = gameState.map { state ->
-//        state.isRoundOver //&& (state.multiplayerState.isHost || !state.multiplayerState.isMultiplayer)
-//    }.onEach { shouldShow: Boolean ->
-//        if (shouldShow) updateGameOverTitle()
-//    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-//    private fun updateGameOverTitle() {
-//        val title = if (_gameState.value.isMatchOver) "Match Over!" else "Round Over!"
-//        _gameState.update {
-//            it.copy(gameOverTitle = title)
-//        }
-//    }
-
-//    private fun updateScoreSetupText() {
-//        val title =
-//            if (_gameState.value.isMatchOver) "Match Complete! New Game Setup" else "Game Setup"
-//        val message = "First to win:"
-//        _gameState.update {
-//            it.copy(scoreSetupTitle = title, scoreSetupMessage = message)
-//        }
-//    }
-
 
     override fun onCleared() {
         super.onCleared()
@@ -957,11 +813,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 nearbyConnectionsManager.sendGameData("collision_event:${position.x},${position.y}")
             }
             val animationId = "${System.currentTimeMillis()}_${position.x}_${position.y}"
-
-            // Calculate zoom center relative to screen
             val zoomCenter = position
 
-            // Start animation
             _gameState.update {
                 it.copy(
                     collisionAnimation = ConfettiAnimation(
@@ -989,7 +842,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 delay(zoomDelay)
             }
 
-            // Hold at max zoom for animation
             delay(1000L)
 
             // Zoom out animation
@@ -1010,15 +862,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     zoomScale = 1f
                 )
             }
-
-
         }
     }
-
-
-
-
-
 }
 
 
@@ -1039,6 +884,9 @@ private fun PlayerState.resetForNewRound() {
     isAlive = true
     direction = 0f
     lastCollision = null
+
+
+
 }
 
 private fun PlayerState.toUiState(): PlayerState {
